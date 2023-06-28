@@ -3,7 +3,7 @@ import numpy as np
 
 """ modified from https://gist.github.com/blink1073/6e417c726b0dd03d5ea0 """
 
-
+#NOTE: This is garbage. Use sigpy instead. 
 def phantom3d(phantom="modified-shepp-logan", n=64):
     """Three-dimensional Shepp-Logan phantom
 

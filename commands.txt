@@ -1,0 +1,16 @@
+Run docker:
+docker run -it --gpus all -v /nobackup/wenxuan/NeSVoR:/usr/local/NeSVoR junshenxu/nesvor
+nesvor -h
+
+
+nesvor segment-stack \
+    --input-stacks volumes/case2_day1_stack.nii.gz  \
+    --output-stack-masks volumes/case2_day1_mask.nii.gz  
+
+
+nesvor reconstruct \
+--input-stacks volumes/stack.nii.gz \
+--output-volume ADCP_1007.nii.gz \
+--bias-field-correction \
+--registration svort
+--otsu-thresholding

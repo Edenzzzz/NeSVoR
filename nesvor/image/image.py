@@ -316,7 +316,6 @@ class Volume(Image):
         xyz = self.xyz_masked
         # new rotation
         xyz = torch.matmul(torch.inverse(R), xyz.view(-1, 3, 1))[..., 0]
-
         xyz_min = xyz.amin(0) - resolution_new * 10
         xyz_max = xyz.amax(0) + resolution_new * 10
         shape_xyz = ((xyz_max - xyz_min) / resolution_new).ceil().long()

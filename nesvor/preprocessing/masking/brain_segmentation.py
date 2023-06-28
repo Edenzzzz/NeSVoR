@@ -32,6 +32,7 @@ def get_monaifbs_checkpoint() -> str:
         )
         url = MONAIFBS_URL
         zip_name = "monaifbs_models.tar.gz"
+        # if not os.path.exists(os.path.join(model_dir, zip_name)):
         torch.hub.download_url_to_file(url, os.path.join(model_dir, zip_name))
         with tarfile.open(os.path.join(model_dir, zip_name)) as file:
             # extracting file
@@ -92,7 +93,6 @@ def build_monaifbs_net(device):
         deep_supr_num=2,
         res_block=False,
     )
-
     net.load_state_dict(torch.load(get_monaifbs_checkpoint(), device)["net"])
     net = net.to(device)
     net.eval()

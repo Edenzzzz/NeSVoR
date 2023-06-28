@@ -31,8 +31,10 @@ class RigidTransform(object):
             raise ValueError("Both data are None!")
         if self.trans_first == True and trans_first == False:
             mat = mat_first2last(mat)
+            breakpoint()
         elif self.trans_first == False and trans_first == True:
             mat = mat_last2first(mat)
+            breakpoint()
         return mat
 
     def axisangle(self, trans_first: bool = True) -> torch.Tensor:
