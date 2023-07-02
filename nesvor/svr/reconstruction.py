@@ -8,6 +8,7 @@ from ..image import Volume, Stack
 from ..utils import get_PSF
 
 
+
 def dot(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return torch.dot(x.flatten(), y.flatten())
 
@@ -27,6 +28,7 @@ def cg(
     while True:
         Ap = A(p)
         alpha = dot_r_r / dot(p, Ap)
+        #x and p have the same shape as the volume
         x = x + alpha * p  # alpha ~ 0.1 - 1
         i += 1
         if i == n_iter:

@@ -47,9 +47,9 @@ def resample(
     for i in range(ndim):
         fac = res_xyz_old[i] / res_xyz_new[i]
         size_new = int(x.shape[-i - 1] * fac)
-        grid_max = (size_new - 1) / fac / (x.shape[-i - 1] - 1)
-        grids.append(
-            torch.linspace(
+        grid_max = (size_new - 1) / fac / (x.shape[-i - 1] - 1) #normalize over spatial dimensions of x
+        grids.append(       #multiply with spatial dims to project back to fractional coordinates for interpolation
+            torch.linspace( 
                 -grid_max, grid_max, size_new, dtype=x.dtype, device=x.device
             )
         )

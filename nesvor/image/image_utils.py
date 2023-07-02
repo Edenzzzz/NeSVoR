@@ -24,7 +24,7 @@ def compare_resolution_affine(r1, a1, r2, a2, s1, s2) -> bool:
         return False
     return True
 
-
+@torch.no_grad()
 def affine2transformation(
     volume: torch.Tensor,
     mask: torch.Tensor,
@@ -34,13 +34,14 @@ def affine2transformation(
     device = volume.device
     d, h, w = volume.shape
 
-    R = affine[:3, :3]
+    R = affine[:3, :3] #rotation matrix
     negative_det = np.linalg.det(R) < 0
 
     T = affine[:3, -1:]  # T = R @ (-T0 + T_r)
     R = R @ np.linalg.inv(np.diag(resolutions))
 
     T0 = np.array([(w - 1) / 2 * resolutions[0], (h - 1) / 2 * resolutions[1], 0])
+    #map back to the space before rotation and add predefined translation for the other two axis
     T = np.linalg.inv(R) @ T + T0.reshape(3, 1)
 
     tz = (

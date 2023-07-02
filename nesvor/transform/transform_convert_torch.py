@@ -4,6 +4,9 @@ TRANSFORM_EPS = 1e-6
 
 
 def axisangle2mat_torch(axisangle: torch.Tensor) -> torch.Tensor:
+    """
+    Reference: https://ai.stackexchange.com/questions/14041/how-can-i-derive-the-rotation-matrix-from-the-axis-angle-rotation-vector
+    """
     theta2 = axisangle[:, :3].pow(2).sum(-1)
     small_angle = theta2 <= TRANSFORM_EPS
     theta = torch.clamp(theta2, min=TRANSFORM_EPS).sqrt()

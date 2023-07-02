@@ -653,7 +653,8 @@ def load_stack(
 
     slices_tensor = torch.tensor(slices, device=device)
     mask_tensor = torch.tensor(mask, device=device)
-
+    #all transformations are the same here as specified by affine.
+    #Will go through registration operation later
     slices_tensor, mask_tensor, transformation = affine2transformation(
         slices_tensor, mask_tensor, resolutions, affine
     )

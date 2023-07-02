@@ -16,6 +16,22 @@ from ..slice_acquisition import slice_acquisition, slice_acquisition_adjoint
 from ..utils import gaussian_blur
 
 # main models
+import nibabel as nib
+
+def tensor2nii(tensor, affine=None, save=True, name="phantom"):
+    """ Helper to convert a tensor to a NIfTI image object """
+    if len(tensor.shape) > 3:
+        tensor = tensor.squeeze()
+    if isinstance(tensor, torch.Tensor):
+        tensor = tensor.detach().cpu().numpy()
+    if isinstance(affine, torch.Tensor):
+        affine = affine.detach().cpu().numpy()
+
+    volume = nib.Nifti1Image(tensor, affine=affine)
+    if save:
+        nib.save(volume, f"{name}.nii.gz")
+    return volume
+
 
 USE_MASK = True
 

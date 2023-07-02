@@ -7,10 +7,15 @@ nesvor segment-stack \
     --input-stacks volumes/case2_day1_stack.nii.gz  \
     --output-stack-masks volumes/case2_day1_mask.nii.gz  
 
+nesvor assess \
+--input-stacks stacks/feta_stack1_gap=3.nii.gz stacks/feta_stack2_gap=3.nii.gz stacks/feta_stack3_gap=3.nii.gz \
+--output-json feta/sub-001/anat/quality_assess.json
 
 nesvor reconstruct \
---input-stacks volumes/stack.nii.gz \
---output-volume ADCP_1007.nii.gz \
+--input-stacks stacks/feta_stack1_gap=3.nii.gz stacks/feta_stack2_gap=3.nii.gz stacks/feta_stack3_gap=3.nii.gz \
+--thickness 3 3 3 \
+--output-volume volumes/feta_rec_nesvor_gap=3.nii.gz \
 --bias-field-correction \
---registration svort
---otsu-thresholding
+--registration stack \
+--metric ncc
+

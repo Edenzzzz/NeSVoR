@@ -91,7 +91,7 @@ class Command(object):
 
 "commands"
 
-
+#NOTE: called by command "nesvor reconstruct"
 class Reconstruct(Command):
     def check_args(self) -> None:
         # input
@@ -129,6 +129,7 @@ class Reconstruct(Command):
 
     def preprocess(self) -> Dict[str, Any]:
         self.new_timer("Data loading")
+        #same transformation matrix from affine here
         input_dict, self.args = inputs(self.args)
         if "input_stacks" in input_dict and input_dict["input_stacks"]:
             if self.args.segmentation:
@@ -161,6 +162,7 @@ class Reconstruct(Command):
         self.new_timer("Reconsturction")
         model, output_slices, mask = train(input_dict["input_slices"], self.args)
         self.new_timer("Results saving")
+        # breakpoint()
         output_volume, simulated_slices = _sample_inr(
             self.args,
             model,

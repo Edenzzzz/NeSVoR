@@ -48,7 +48,7 @@ def phantom3d(phantom="modified-shepp-logan", n=64):
         raise TypeError('phantom type "%s" not recognized' % phantom)
 
     p = np.zeros(n**3)
-    rng = ((np.arange(0, n - 1)) - (n - 1) / 2) / ((n - 1) / 2)
+    rng = ((np.arange(0, n)) - (n - 1) / 2) / ((n - 1) / 2)
     x, y, z = np.meshgrid(rng, rng, rng)
     coord = np.vstack((x.flatten(), y.flatten(), z.flatten()))
     pi = np.pi

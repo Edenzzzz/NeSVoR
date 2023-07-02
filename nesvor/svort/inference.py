@@ -475,6 +475,7 @@ def run_svort(
     if vvr:
         # stack-to-stack registration
         time_start = time.time()
+        #NOTE: This handles transformation matrix
         __ss = stack_registration([ss_stack_full, ss_ori] if svort else [ss_ori], svort)
         logging.debug("time for stack registration: %f s" % (time.time() - time_start))
         # estimate NCC score for stack-to-stack registration

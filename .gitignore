@@ -10,7 +10,10 @@ MedicalImaging/**/**
 __pycache__/
 *.py[cod]
 *$py.class
-
+volumes/**
+stacks/**
+feta/**
+ADNI/**
 # C extensions
 *.so
 
