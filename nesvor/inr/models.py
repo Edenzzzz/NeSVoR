@@ -299,6 +299,9 @@ class NeSVoR(nn.Module):
         if "cpu" in str(args.device):  # CPU mode
             global USE_TORCH
             USE_TORCH = True
+        else:
+            # set default GPU for tinycudann
+            torch.cuda.set_device(args.device)
         self.spatial_scaling = spatial_scaling
         self.args = args
         self.n_slices = 0

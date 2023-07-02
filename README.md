@@ -110,17 +110,17 @@ Note: our latest image was built with CUDA 11.7.
 
 #### Run NeSVoR with Docker
 
-You may run a container in an iterative way.
+You may run a container in an interactive way.
 
 ```
-docker run -it --gpus all junshenxu/nesvor
+docker run -it --gpus all --ipc=host junshenxu/nesvor
 nesvor -h
 ```
 
 You may also run the `nesvor` command directly as follows.
 
 ```
-docker run --rm --gpus all \
+docker run --rm --gpus all --ipc=host \
     -v <path-to-inputs>:/incoming:ro -v <path-to-outputs>:/outgoing:rw \
     junshenxu/nesvor \
     nesvor reconstruct \

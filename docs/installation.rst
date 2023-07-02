@@ -29,14 +29,14 @@ You may run a container in an iterative way.
 
 .. code-block:: bash
 
-    docker run -it --gpus all junshenxu/nesvor:v-version-placeholder-
+    docker run -it --gpus all --ipc=host junshenxu/nesvor:v-version-placeholder-
     nesvor -h
 
 You may also run the ``nesvor`` command directly as follows.
 
 .. code-block:: bash
 
-    docker run --rm --gpus all \
+    docker run --rm --gpus all --ipc=host \
         -v <path-to-inputs>:/incoming:ro -v <path-to-outputs>:/outgoing:rw \
         junshenxu/nesvor:v-version-placeholder- \
         nesvor reconstruct \

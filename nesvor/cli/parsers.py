@@ -799,8 +799,8 @@ def build_parser_common() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help=(
-            "Id of the device to use."
-            "Use GPU if it is nonnegative and use CPU if it is negative."
+            "Id of the device to use. "
+            "Use GPU if it is nonnegative and use CPU if it is negative. "
         ),
     )
     parser.add_argument(

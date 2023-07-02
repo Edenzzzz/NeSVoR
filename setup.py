@@ -13,6 +13,8 @@ with open("./nesvor/version.py") as fp:
 
 
 def get_long_description():
+    if not os.path.exists("README.md"):
+        return ""
     with open("README.md", "r") as fh:
         long_description = fh.read()
     return long_description
