@@ -30,15 +30,14 @@ def tensor2nii(tensor, affine=None):
     return nib.Nifti1Image(tensor.detach().cpu().numpy(), affine=affine)
 
 
-def show_slices(volume, volume_=None, compare=False):
+def show_slices(volume, volume_=None):
     """ Function to display row of image slices """
     if isinstance(volume, torch.Tensor):
         volume = volume.squeeze().detach().cpu().numpy()
     if isinstance(volume_, torch.Tensor):
         volume_ = volume_.squeeze().detach().cpu().numpy()
 
-    if compare:
-        assert volume_ is not None, "Please provide a volume to compare to"
+    if volume_ is not None:
         fig, axes = plt.subplots(2, 3)
         plot_slices_helper(volume, "Original", fig, axes[0])
         plot_slices_helper(volume_, "Reconstructed", fig, axes[1])
@@ -65,9 +64,12 @@ def plot_slices_helper(volume, title="", fig=None, axes=None):
     
     return fig 
 
-def volume2stacks(paths, out_dir=None, gap=3, stack_res=0.8, source_res=0.5469):
+def volume2stacks(paths, out_dir=None, gap=3, stack_res=0.8, simulated_res=1.5):
     """
     Extract 3 orthogonal stacks from volumes and run reconstruction
+    Args:
+        simulated_res: resolution of the super-resolved volume. 
+            The higher the better reconstruction quality (around 1.5 is best)
     """
     slice_acq = TestSliceAcq(verbose=True)
     for path in paths:
@@ -86,8 +88,7 @@ def volume2stacks(paths, out_dir=None, gap=3, stack_res=0.8, source_res=0.5469):
             slice_acq.get_cg_recon_test_data(angles, 
                                         volume,
                                         stack_res=stack_res, 
-                                        source_res=1.5, #TODO: This doesn't appear to be the source resolution, or why must it be 1.5
-                                                        #to produce good results?
+                                        simulated_res=simulated_res,
                                         return_stack_as_list=True
                                         )
         
@@ -122,7 +123,7 @@ def volume2stacks(paths, out_dir=None, gap=3, stack_res=0.8, source_res=0.5469):
                         "--bias-field-correction",
                         "--registration", "svort",
                         "--metric", "ncc",  #assess stack quality
-                        "--output-resolution", str(0.8) #default=0.8
+                        "--output-resolution", str(0.8), #default=0.8
                         ])
         
 
@@ -136,5 +137,9 @@ if __name__ == "__main__":
     # prefix = "MedicalImaging/adcp_alldata_location2/ADCP_harmonization"
     # paths = sorted(os.listdir(prefix))[:5]
     # paths = [os.path.join(prefix, path, "T1w_acpc_dc_restore_1mm.nii.gz") for path in paths]
+
+    # paths = ["ADNI/adcp_alldata_location2/ADCP_harmonization/ADCP_1005/T1w_acpc_dc_restore_1mm.nii.gz"]
+    # volume2stacks(paths, stack_res=1.0, gap=2)
+
     paths = ["feta/sub-001/anat/sub-001_rec-mial_T2w.nii.gz"]
-    volume2stacks(paths)
+    volume2stacks(paths, stack_res=0.8, gap=3, simulated_res=1.6)

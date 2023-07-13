@@ -90,7 +90,7 @@ class TestSliceAcq(TestCaseNeSVoR):
                                 volume: torch.Tensor=None,
                                 gap=3,
                                 stack_res=1,
-                                source_res=1.5,
+                                simulated_res=1.5,
                                 return_stack_as_list=True,
                                 ):
         """
@@ -98,8 +98,7 @@ class TestSliceAcq(TestCaseNeSVoR):
             angles: list of angles to use for slice acquisition
             gap: slice thickness(gap) in the stacks
             stack_res: in-plane resolution of the stacks along x and y axes
-            source_res: in-plane resolution of the original volume. 
-                Must be specifed accoording to the dataset if using real data.
+            simulated_res: in-plane resolution of the simulated (super-resolved) volume. 
             volume: if None, a phantom will be created.
         """
 
@@ -107,7 +106,7 @@ class TestSliceAcq(TestCaseNeSVoR):
 
         s_thick = gap
         res = stack_res
-        res_s = source_res 
+        res_s = simulated_res 
         n_slice = int((np.sqrt(3) * vs) / gap) + 4
         ss = int((np.sqrt(3) * vs) / res_s) + 4
         
@@ -120,7 +119,7 @@ class TestSliceAcq(TestCaseNeSVoR):
                 volume = shepp_logan((vs, vs, vs))
         else:
             print('Using provided volume')
-            if stack_res == 1 and source_res == 1.5:
+            if stack_res == 1 and simulated_res == 1.5:
                 Warning("Real volume is providing but still specifying default phantom resolution")
 
 
@@ -222,7 +221,7 @@ class TestSliceAcq(TestCaseNeSVoR):
             self.get_cg_recon_test_data(angles, 
                                     volume,
                                     stack_res=stack_res, 
-                                    source_res=source_res,
+                                    simulated_res=source_res,
                                     return_stack_as_list=True
                                     )
         

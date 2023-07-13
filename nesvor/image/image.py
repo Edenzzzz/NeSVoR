@@ -201,6 +201,7 @@ class Image(_Data):
     def xyz_masked(self) -> torch.Tensor:
         return transform_points(self.transformation, self.xyz_masked_untransformed)
 
+    # @wenxuan: coordinates used by INR
     @property
     def xyz_masked_untransformed(self) -> torch.Tensor:
         kji = torch.flip(torch.nonzero(self.mask), (-1,))
@@ -655,6 +656,7 @@ def load_stack(
     mask_tensor = torch.tensor(mask, device=device)
     #all transformations are the same here as specified by affine.
     #Will go through registration operation later
+    #transformation contains affine matrix for each slice
     slices_tensor, mask_tensor, transformation = affine2transformation(
         slices_tensor, mask_tensor, resolutions, affine
     )

@@ -159,6 +159,7 @@ class Reconstruct(Command):
 
     def exec(self) -> None:
         input_dict = self.preprocess()
+        breakpoint()
         self.new_timer("Reconsturction")
         model, output_slices, mask = train(input_dict["input_slices"], self.args)
         self.new_timer("Results saving")

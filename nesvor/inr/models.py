@@ -334,7 +334,7 @@ class NeSVoR(nn.Module):
     def build_network(self, bounding_box) -> None:
         if self.args.n_features_slice:
             self.slice_embedding = nn.Embedding(
-                self.n_slices, self.args.n_features_slice
+                self.n_slices, self.args.n_features_slice # = 16
             )
         if not self.args.no_slice_scale:
             self.logit_coef = nn.Parameter(
@@ -349,6 +349,7 @@ class NeSVoR(nn.Module):
                 self.n_slices, self.args.n_features_deform
             )
             self.deform_net = DeformNet(bounding_box, self.args, self.spatial_scaling)
+        #@Wenxuan: replace INR here
         # INR
         self.inr = INR(bounding_box, self.args, self.spatial_scaling)
         # sigma net
@@ -391,6 +392,7 @@ class NeSVoR(nn.Module):
         psf_sigma = self.psf_sigma[slice_idx][:, None]
         # transform points
         t = self.axisangle[slice_idx][:, None]
+        breakpoint()
         xyz = ax_transform_points(
             t, xyz[:, None] + xyz_psf * psf_sigma, self.trans_first
         )
@@ -406,6 +408,7 @@ class NeSVoR(nn.Module):
             se = self.slice_embedding(slice_idx)[:, None].expand(-1, n_samples, -1)
         else:
             se = None
+        # breakpoint()
         # forward
         results = self.net_forward(xyz, se)
         # output

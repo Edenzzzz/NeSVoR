@@ -97,6 +97,7 @@ def train(slices: List[Slice], args: Namespace) -> Tuple[INR, List[Slice], Volum
         # forward
         batch = dataset.get_batch(args.batch_size, args.device)
         with torch.cuda.amp.autocast(fp16):
+            breakpoint()
             losses = model(**batch)
             loss = 0
             for k in losses:

@@ -185,7 +185,7 @@ def parse_data(
         logging.debug("Preprocessing stack %s for registration.", data.name)
         # resample
         slices = resample(
-            data.slices * data.mask,
+            data.slices * data.mask, # @wenxuan: where is the mask coming from?
             (data.resolution_x, data.resolution_y),
             (res_s, res_s),
         )
@@ -524,7 +524,7 @@ def run_svort(
     for stack in dataset:
         idx_nonempty = stack.mask.flatten(1).any(1)
         stack.slices /= torch.quantile(stack.slices[stack.mask], 0.99)  # normalize
-        slices.extend(stack[idx_nonempty])
+        slices.extend(stack[idx_nonempty]) # @wenxuan: extract slices here
 
     return slices
 

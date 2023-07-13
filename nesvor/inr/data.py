@@ -16,8 +16,13 @@ class PointDataset(object):
         resolution_all = []
 
         for i, slice in enumerate(slices):
+            # slice.data is the slice: (1, h, w)
+            # slice._mask: (1, h, w)
+            # slice.xyz_masked_untransformed: (slice._mask.sum(), 3)
+            # slice.v_masked: (slice._mask.sum(), )
+
             xyz = slice.xyz_masked_untransformed
-            v = slice.v_masked
+            v = slice.v_masked                      # image data TODO: how is v preprocessed?
             slice_idx = torch.full(v.shape, i, device=v.device)
             xyz_all.append(xyz)
             v_all.append(v)
@@ -25,10 +30,10 @@ class PointDataset(object):
             transformation_all.append(slice.transformation)
             resolution_all.append(slice.resolution_xyz)
 
-        self.xyz = torch.cat(xyz_all)
-        self.v = torch.cat(v_all)
-        self.slice_idx = torch.cat(slice_idx_all)
-        self.transformation = RigidTransform.cat(transformation_all)
+        self.xyz = torch.cat(xyz_all)               # (?, 3) NOTE: each slice has a different number of unmasked points
+        self.v = torch.cat(v_all)                   # (?, )
+        self.slice_idx = torch.cat(slice_idx_all)   # (?, )
+        self.transformation = RigidTransform.cat(transformation_all) # (nslices, 3, 4)
         self.resolution = torch.stack(resolution_all, 0)
         self.count = self.v.shape[0]
         self.epoch = 0
@@ -55,7 +60,9 @@ class PointDataset(object):
             self.count = 0
             self.epoch += 1
             idx = torch.randperm(self.xyz.shape[0], device=device)
+            # slice coordinates
             self.xyz = self.xyz[idx]
+
             self.v = self.v[idx]
             self.slice_idx = self.slice_idx[idx]
         # fetch a batch of data
