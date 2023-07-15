@@ -19,7 +19,7 @@ def train(slices: List[Slice], args: Namespace) -> Tuple[INR, List[Slice], Volum
         args.n_iter = args.n_epochs * (dataset.v.numel() // args.batch_size)
 
     use_scaling = True
-    use_centering = True
+    use_centering = True #TODO: ?
     # perform centering and scaling
     spatial_scaling = 30.0 if use_scaling else 1
     bb = dataset.bounding_box
@@ -92,12 +92,14 @@ def train(slices: List[Slice], args: Namespace) -> Tuple[INR, List[Slice], Volum
     logging_header = False
     logging.info("NeSVoR training starts.")
     train_time = 0.0
+
+    # NOTE: all slice coordinates up until this point
+    # are untransformed (slice coordinates) scaled by spatial_scaling
     for i in range(1, args.n_iter + 1):
         train_step_start = time.time()
         # forward
         batch = dataset.get_batch(args.batch_size, args.device)
         with torch.cuda.amp.autocast(fp16):
-            breakpoint()
             losses = model(**batch)
             loss = 0
             for k in losses:

@@ -521,10 +521,11 @@ def run_svort(
             dataset[j].transformation = transforms_out[j]
 
     slices = []
+    # @wenxuan: up until this point, stacks are of the original shape
     for stack in dataset:
         idx_nonempty = stack.mask.flatten(1).any(1)
         stack.slices /= torch.quantile(stack.slices[stack.mask], 0.99)  # normalize
-        slices.extend(stack[idx_nonempty]) # @wenxuan: extract slices here
+        slices.extend(stack[idx_nonempty]) # @wenxuan: construct slices here and apply masks 
 
     return slices
 

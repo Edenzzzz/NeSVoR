@@ -197,16 +197,21 @@ class Image(_Data):
         output_volume = self.mask.to(self.image.dtype)
         save_nii_volume(path, output_volume, affine)
 
+    # @wenxuan: 3D coordinates used by INR
     @property
     def xyz_masked(self) -> torch.Tensor:
         return transform_points(self.transformation, self.xyz_masked_untransformed)
 
-    # @wenxuan: coordinates used by INR
+    # @wenxuan: slice coordinates
     @property
     def xyz_masked_untransformed(self) -> torch.Tensor:
-        kji = torch.flip(torch.nonzero(self.mask), (-1,))
-        return (kji - (self.shape_xyz - 1) / 2) * self.resolution_xyz
+        # flip(indices, dims=-1): zyx -> xyz
+        xyz = torch.flip(torch.nonzero(self.mask), (-1,))  
+        # self.shape_xyz: (h, w, 1)
+        # self.resolution_xyz: slice thickness along the 3 axes
+        return (xyz - (self.shape_xyz - 1) / 2) * self.resolution_xyz
 
+    # masked slice intensities
     @property
     def v_masked(self) -> torch.Tensor:
         return self.image[self.mask]
@@ -243,6 +248,10 @@ class Image(_Data):
 
 
 class Slice(Image):
+    def __init__(self, *args, **kwargs) -> None:
+        #breakpoint()
+        super().__init__(*args, **kwargs)
+
     def check_data(self, value) -> None:
         super().check_data(value)
         if value.shape[0] != 1:
@@ -633,7 +642,7 @@ def load_slices(
         )
     return [slice for _, slice in sorted(zip(ids, slices))]
 
-
+# @wenxuan: mask applied here
 def load_stack(
     path_vol: PathType,
     path_mask: Optional[PathType] = None,

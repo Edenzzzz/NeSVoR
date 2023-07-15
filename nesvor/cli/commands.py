@@ -159,11 +159,9 @@ class Reconstruct(Command):
 
     def exec(self) -> None:
         input_dict = self.preprocess()
-        breakpoint()
         self.new_timer("Reconsturction")
         model, output_slices, mask = train(input_dict["input_slices"], self.args)
         self.new_timer("Results saving")
-        # breakpoint()
         output_volume, simulated_slices = _sample_inr(
             self.args,
             model,
@@ -466,14 +464,13 @@ def _sample_inr(
 ) -> Tuple[Optional[Volume], Optional[List[Slice]]]:
     if return_slices:
         assert slices_template is not None, "slices tempalte can not be None!"
-
     mask = override_sample_mask(
         mask,
         getattr(args, "sample_mask", None),
         getattr(args, "output_resolution", None),
         getattr(args, "sample_orientation", None),
     )
-
+    # breakpoint()
     output_volume = (
         sample_volume(
             model,

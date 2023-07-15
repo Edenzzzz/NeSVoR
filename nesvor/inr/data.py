@@ -1,5 +1,7 @@
 from typing import Dict, List
 import torch
+
+from nesvor.image import Slice
 from ..utils import gaussian_blur
 from ..transform import RigidTransform, transform_points
 from ..image import Volume, Slice
@@ -20,7 +22,6 @@ class PointDataset(object):
             # slice._mask: (1, h, w)
             # slice.xyz_masked_untransformed: (slice._mask.sum(), 3)
             # slice.v_masked: (slice._mask.sum(), )
-
             xyz = slice.xyz_masked_untransformed
             v = slice.v_masked                      # image data TODO: how is v preprocessed?
             slice_idx = torch.full(v.shape, i, device=v.device)
@@ -37,7 +38,9 @@ class PointDataset(object):
         self.resolution = torch.stack(resolution_all, 0)
         self.count = self.v.shape[0]
         self.epoch = 0
-
+    # boundary of the voxel grid used during training.
+    # Later when generating the volume, will use 10 times
+    # the max resolution instead of 2
     @property
     def bounding_box(self) -> torch.Tensor:
         max_r = self.resolution.max()
@@ -73,11 +76,13 @@ class PointDataset(object):
         }
         self.count += batch_size
         return batch
-
+    
+    # multiply with the transformation matrix
     @property
     def xyz_transformed(self) -> torch.Tensor:
         return transform_points(self.transformation[self.slice_idx], self.xyz)
 
+    #TODO: This doesn't seem to be the output size?
     @property
     def mask(self) -> Volume:
         with torch.no_grad():
@@ -118,3 +123,18 @@ class PointDataset(object):
                 resolution_min,
                 resolution_min,
             )
+
+
+class VolumeDataset(PointDataset):
+    def __init__(self, slices: List[Slice]) -> None:
+        super().__init__(slices)
+
+    def get_batch(self, batch_size: int, device) -> Dict[str, torch.Tensor]:
+        """
+        Instead of returning the point cloud, return the volume bounding these points
+        """
+        xyz, v, slice_idx = super().get_batch(batch_size, device).values()
+        
+        bbox = self.bounding_box
+        bbox[0] = bbox[0].floor(); bbox[1] = bbox[1].ceil()
+        bbox = bbox.long()

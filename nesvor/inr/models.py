@@ -8,7 +8,6 @@ import torch.nn as nn
 from .hash_grid_torch import HashEmbedder
 from ..transform import RigidTransform, ax_transform_points, mat_transform_points
 from ..utils import resolution2sigma
-
 USE_TORCH = False
 
 if not USE_TORCH:
@@ -131,6 +130,9 @@ class INR(nn.Module):
     def __init__(
         self, bounding_box: torch.Tensor, args: Namespace, spatial_scaling: float = 1.0
     ) -> None:
+        """
+        Takes in discrete 3D coordinates within the bounding box 
+        """
         super().__init__()
         if TYPE_CHECKING:
             self.bounding_box: torch.Tensor
@@ -150,8 +152,9 @@ class INR(nn.Module):
             n_levels=n_levels,
             n_features_per_level=args.n_features_per_level,
             log2_hashmap_size=args.log2_hashmap_size,
-            base_resolution=base_resolution,
-            per_level_scale=args.level_scale,
+            base_resolution=base_resolution,    # @wenxuan
+            per_level_scale=args.level_scale,   # the resolution/grid size multiplier between levels, by which coords are multiplied 
+                                                # Low res -> high res, low freq -> high freq
             dtype=args.dtype,
         )
         # density net
@@ -186,9 +189,14 @@ class INR(nn.Module):
 
     def forward(self, x: torch.Tensor):
         x = (x - self.bounding_box[0]) / (self.bounding_box[1] - self.bounding_box[0])
-        prefix_shape = x.shape[:-1]
+        # breakpoint()
+        prefix_shape = x.shape[:-1] # (batch_size, n_psf_samples)
         x = x.view(-1, x.shape[-1])
         pe = self.encoding(x)
+        # @wenxuan NOTE: Can construct the volume after hash encoding!
+         
+        # The density net takes encodings at all levels, but the other two
+        # split them
         if not self.training:
             pe = pe.to(dtype=x.dtype)
         z = self.density_net(pe)
@@ -349,7 +357,7 @@ class NeSVoR(nn.Module):
                 self.n_slices, self.args.n_features_deform
             )
             self.deform_net = DeformNet(bounding_box, self.args, self.spatial_scaling)
-        #@Wenxuan: replace INR here
+        # @wenxuan: replace INR here
         # INR
         self.inr = INR(bounding_box, self.args, self.spatial_scaling)
         # sigma net
@@ -385,14 +393,16 @@ class NeSVoR(nn.Module):
         # sample psf point
         batch_size = xyz.shape[0]
         n_samples = self.args.n_samples
+        #NOTE: monte carlo sampling for psf at each pixel location
+        # see notes before eq. (7) in the paper
         xyz_psf = torch.randn(
             batch_size, n_samples, 3, dtype=xyz.dtype, device=xyz.device
-        )
+        ) 
         # psf = 1
         psf_sigma = self.psf_sigma[slice_idx][:, None]
         # transform points
         t = self.axisangle[slice_idx][:, None]
-        breakpoint()
+        # @wenxuan: map slice coordinates to 3D coordinates
         xyz = ax_transform_points(
             t, xyz[:, None] + xyz_psf * psf_sigma, self.trans_first
         )

@@ -89,7 +89,8 @@ class HashEmbedder(nn.Module):
         # x is 3D point position: B x 3
         x_embedded_all = []
         for i in range(self.n_levels):
-            resolution = int(self.base_resolution * self.b**i)
+            resolution = int(self.base_resolution * self.b**i) # scale coordinates * resolution
+
             (
                 voxel_min_vertex,
                 hashed_voxel_indices,
