@@ -204,10 +204,6 @@ class TestSliceAcq(TestCaseNeSVoR):
         slices, transforms, volume, params = self.get_cg_recon_test_data(angles, volume, return_stack_as_list=False) #svort requires concated slices
         srr = SRR(n_iter=20, tol=1e-8)
         theta = mat_update_resolution(transforms.matrix(), 1, params["res_r"])
-        
-        #NOTE: check that each slice stack has the same rotation matrix
-        # compare = (theta[1, :, :3] == theta[:, :, :3]).all(dim=-1).all(dim=-1) #shape: (n_slices *)
-        # assert compare[:compare.shape[0] // 3].all()
         volume_ = srr(theta, slices, volume, params)
         
         #log error metrics
@@ -230,10 +226,6 @@ class TestSliceAcq(TestCaseNeSVoR):
         subject_id = path.split("/")[-1][:7]
         stack_path = []
         for idx, (stack, transform) in enumerate(zip(stacks, transforms)):
-            # stack = tensor2nii(stack, affine=affine)
-            # path = os.path.join(out_dir, f"{name}_stack{idx}.nii.gz")
-            # nib.save(stack, path)
-            # stack_path.append(path)
 
             stack = Stack(stack, transformation=transform, resolution_x=stack_res, 
                           resolution_y=stack_res,

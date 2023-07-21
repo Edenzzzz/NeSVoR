@@ -276,13 +276,13 @@ def slice_acquisition_no_psf_torch(
     vol_mask: Optional[torch.Tensor],
     slices_mask: Optional[torch.Tensor],
     slice_shape: Sequence,
-    res_slice: float,
+    res_slice: float, # res_simulated / res_original
 ) -> torch.Tensor:
     slice_shape = tuple(slice_shape)
     device = transforms.device
     _slice = torch.ones((1,) + slice_shape, dtype=torch.bool, device=device)
     slice_xyz = Slice(_slice, _slice, resolution_x=res_slice).xyz_masked_untransformed
-    # transformation
+    # transformation has one more "slice_idx" dimension
     slice_xyz = mat_transform_points(
         transforms[:, None], slice_xyz[None], trans_first=True
     ).view((transforms.shape[0], 1) + slice_shape + (3,))

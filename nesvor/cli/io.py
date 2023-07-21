@@ -71,6 +71,7 @@ def outputs(data: Dict, args: Namespace) -> None:
     if getattr(args, "output_volume", None) and "output_volume" in data:
         if args.output_intensity_mean:
             data["output_volume"].rescale(args.output_intensity_mean)
+
         data["output_volume"].save(
             args.output_volume, masked=not getattr(args, "with_background", False)
         )

@@ -7,6 +7,11 @@ from ..utils import DeviceType
 
 
 class RigidTransform(object):
+    """
+    Axis-angle representation of rigid transform.
+    Rotation and translation are represented by a 3x3 matrix and a 3x1 vector respectively.
+    No zooming is included.
+    """
     def __init__(
         self, data: torch.Tensor, trans_first: bool = True, device: DeviceType = None
     ) -> None:

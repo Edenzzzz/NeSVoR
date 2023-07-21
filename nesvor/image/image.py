@@ -17,6 +17,7 @@ from .image_utils import (
     load_nii_volume,
     save_nii_volume,
 )
+from scipy.spatial.transform import Rotation 
 from ..utils import meshgrid, PathType, DeviceType, resample
 
 
@@ -205,12 +206,17 @@ class Image(_Data):
     # @wenxuan: slice coordinates
     @property
     def xyz_masked_untransformed(self) -> torch.Tensor:
-        # flip(indices, dims=-1): zyx -> xyz
+        """
+        flip(indices, dims=-1): zyx -> xyz
+        self.shape_xyz: (h, w, 1)
+        self.resolution_xyz: slice thickness along the 3 axes
+        """
+        
         xyz = torch.flip(torch.nonzero(self.mask), (-1,))  
-        # self.shape_xyz: (h, w, 1)
-        # self.resolution_xyz: slice thickness along the 3 axes
+        # centered slice coordinates
         return (xyz - (self.shape_xyz - 1) / 2) * self.resolution_xyz
 
+        
     # masked slice intensities
     @property
     def v_masked(self) -> torch.Tensor:
@@ -248,8 +254,16 @@ class Image(_Data):
 
 
 class Slice(Image):
-    def __init__(self, *args, **kwargs) -> None:
-        #breakpoint()
+    def __init__(self, *args,
+                idx_in_stack: int = None,
+                rot_angles=torch.tensor([0, 0, 0]),
+                rot_dim=0,
+                **kwargs
+                ) -> None:
+        
+        self.idx_in_stack = idx_in_stack
+        self.rot_angles = rot_angles
+        self.rot_dim = rot_dim
         super().__init__(*args, **kwargs)
 
     def check_data(self, value) -> None:
@@ -262,6 +276,17 @@ class Slice(Image):
             **self._clone_dict(zero, deep),
         )
 
+    # @property
+    # def xyz_masked_volume(self) -> torch.Tensor:
+    #     """
+    #     Return the coordinates of points in the original volume after masking
+    #     """
+    #     xyz = self.xyz_masked_untransformed.round()
+    #     # transpose the z axis the actual axis that's "sliced over"
+    #     rot_matrix = Rotation.from_euler('xyz', self.rot_angles, degrees=True).as_matrix()
+    #     xyz = xyz @ torch.tensor(rot_matrix).to(xyz)
+    #     return xyz
+    
     def resample(
         self,
         resolution_new: Union[float, Sequence],
@@ -398,6 +423,7 @@ class Stack(_Data):
         self.thickness = thickness
         self.gap = gap
         self.name = name
+        self.rot_angles = torch.tensor([90, 0, 0])
 
     def check_data(self, value) -> None:
         super().check_data(value)
@@ -412,7 +438,29 @@ class Stack(_Data):
             raise RuntimeError(
                 "The number of transformatons is not equal to the number of slices!"
             )
+        
+    # @wenxuan
+    @staticmethod
+    def affine2angles(trans_matrix: torch.Tensor) -> torch.Tensor:
+        #TODO: not working currently
+        r = Rotation.from_matrix(trans_matrix.cpu().numpy().squeeze()[:, :3])
+        angles = r.as_euler("xyz", degrees=True)
+        angles = torch.tensor(angles).to(trans_matrix).round()
+        return angles
+    
+    # @property
+    # def rot_angles(self) -> torch.Tensor:
+    #     """
+    #     Compute the rotation euler angles of the stack
+    #     from the affine matrix
+    #     """
+    #     trans_matrix = self.transformation.mean().matrix()
+    #     return Stack.affine2angles(trans_matrix)        
 
+    # @rot_angles.setter
+    # def rot_angles(self, value: torch.Tensor) -> None:
+    #     self.angles = value
+        
     @property
     def slices(self) -> torch.Tensor:
         return self.data
@@ -423,11 +471,14 @@ class Stack(_Data):
 
     def __len__(self) -> int:
         return self.slices.shape[0]
-
+    
     def __getitem__(self, idx):
         slices = self.slices[idx]
         masks = self.mask[idx]
         transformation = self.transformation[idx]
+        angles = self.rot_angles
+        # the rotation axis.
+        rot_dim = angles.argmax()
         if slices.ndim < self.slices.ndim:
             return Slice(
                 slices,
@@ -436,6 +487,9 @@ class Stack(_Data):
                 self.resolution_x,
                 self.resolution_y,
                 self.thickness,
+                idx_in_stack=(i - 1) * self.gap,
+                rot_angles=angles,
+                rot_dim=rot_dim
             )
         else:
             return [
@@ -446,6 +500,9 @@ class Stack(_Data):
                     self.resolution_x,
                     self.resolution_y,
                     self.thickness,
+                    idx_in_stack=(i - 1) * self.gap,
+                    rot_angles=angles,
+                    rot_dim=rot_dim
                 )
                 for i in range(len(transformation))
             ]
@@ -514,7 +571,7 @@ class Stack(_Data):
 
     def clone(self, *, zero: bool = False, deep: bool = True) -> Stack:
         return Stack(**self._clone_dict(zero, deep))
-
+    
     @staticmethod
     def like(
         stack: Stack,

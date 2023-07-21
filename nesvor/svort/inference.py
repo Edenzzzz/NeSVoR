@@ -13,7 +13,6 @@ from ..utils import get_PSF, ncc_loss, resample
 from ..image import Stack, Slice, Volume
 from .. import CHECKPOINT_DIR, SVORT_URL_DICT
 
-
 def compute_score(ncc: torch.Tensor, ncc_weight: torch.Tensor) -> float:
     ncc_weight = ncc_weight.view(ncc.shape)
     return -((ncc * ncc_weight).sum() / ncc_weight.sum()).item()
@@ -191,7 +190,7 @@ def parse_data(
         )
         slices_ori = slices.clone()
         # crop x,y
-        s = slices[torch.argmax((slices > 0).sum((1, 2, 3))), 0]
+        s = slices[torch.argmax((slices > 0).sum((1, 2, 3))), 0] # the slice with the most non-zero pixels
         i1, i2, j1, j2 = 0, s.shape[0] - 1, 0, s.shape[1] - 1
         while i1 < s.shape[0] and s[i1, :].sum() == 0:
             i1 += 1
@@ -427,7 +426,7 @@ def run_svort(
     vvr: bool,
     force_vvr: bool,
     force_scanner: bool,
-) -> List[Slice]:
+) -> List[Stack]:
     if svort or vvr:
         (dataset, stacks_in, ss_ori, stacks_full, crop_idx, volume, psf) = parse_data(
             dataset, svort
@@ -475,7 +474,7 @@ def run_svort(
     if vvr:
         # stack-to-stack registration
         time_start = time.time()
-        #NOTE: This handles transformation matrix
+        #NOTE: This computes the transformation matrix
         __ss = stack_registration([ss_stack_full, ss_ori] if svort else [ss_ori], svort)
         logging.debug("time for stack registration: %f s" % (time.time() - time_start))
         # estimate NCC score for stack-to-stack registration
@@ -520,14 +519,7 @@ def run_svort(
         for j in range(len(dataset)):
             dataset[j].transformation = transforms_out[j]
 
-    slices = []
-    # @wenxuan: up until this point, stacks are of the original shape
-    for stack in dataset:
-        idx_nonempty = stack.mask.flatten(1).any(1)
-        stack.slices /= torch.quantile(stack.slices[stack.mask], 0.99)  # normalize
-        slices.extend(stack[idx_nonempty]) # @wenxuan: construct slices here and apply masks 
-
-    return slices
+    return dataset
 
 
 def svort_predict(
@@ -538,7 +530,7 @@ def svort_predict(
     vvr: bool,
     force_vvr: bool,
     force_scanner: bool,
-) -> List[Slice]:
+) -> List[Stack]:
     model: Optional[torch.nn.Module] = None
     if svort:
         if svort_version not in SVORT_URL_DICT:

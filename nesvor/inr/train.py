@@ -14,21 +14,26 @@ from .data import PointDataset
 
 def train(slices: List[Slice], args: Namespace) -> Tuple[INR, List[Slice], Volume]:
     # create training dataset
-    dataset = PointDataset(slices)
+    dataset = PointDataset(slices, args)
+    if args.o_inr:
+        args.batch_size = dataset.xyz.shape[0] # @wenxuan: use all points for O-INR
+        args.image_regularization = "none"
+        
     if args.n_epochs is not None:
         args.n_iter = args.n_epochs * (dataset.v.numel() // args.batch_size)
 
-    use_scaling = True
-    use_centering = True #TODO: ?
+    use_scaling = False
+    use_centering = False
     # perform centering and scaling
     spatial_scaling = 30.0 if use_scaling else 1
     bb = dataset.bounding_box
     center = (bb[0] + bb[-1]) / 2 if use_centering else torch.zeros_like(bb[0])
     ax = (
-        RigidTransform(torch.cat([torch.zeros_like(center), -center])[None])
+        RigidTransform(torch.cat([torch.zeros_like(center), -center])[None]) # translate to the center of the bounding box
         .compose(dataset.transformation)
         .axisangle()
     )
+
     ax[:, -3:] /= spatial_scaling
     transformation = RigidTransform(ax)
     dataset.xyz /= spatial_scaling
@@ -40,6 +45,7 @@ def train(slices: List[Slice], args: Namespace) -> Tuple[INR, List[Slice], Volum
         (bb - center) / spatial_scaling,
         spatial_scaling,
         args,
+        dataset=dataset
     )
     # setup optimizer
     params_net = []

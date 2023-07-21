@@ -8,6 +8,9 @@ import torch.nn as nn
 from .hash_grid_torch import HashEmbedder
 from ..transform import RigidTransform, ax_transform_points, mat_transform_points
 from ..utils import resolution2sigma
+from .net_v3 import volumeNet
+from .data import PointDataset
+
 USE_TORCH = False
 
 if not USE_TORCH:
@@ -27,6 +30,10 @@ T_REG = "transReg"
 I_REG = "imageReg"
 D_REG = "deformReg"
 
+def select_idx(*args, idx=None):
+    if idx is None:
+        return args
+    return tuple(arg[idx] for arg in args)
 
 def build_encoding(**config):
     if USE_TORCH:
@@ -128,7 +135,10 @@ def compute_resolution_nlevel(
 
 class INR(nn.Module):
     def __init__(
-        self, bounding_box: torch.Tensor, args: Namespace, spatial_scaling: float = 1.0
+        self, bounding_box: torch.Tensor,
+        args: Namespace,
+        spatial_scaling: float = 1.0,
+        dataset: Optional[PointDataset] = None,
     ) -> None:
         """
         Takes in discrete 3D coordinates within the bounding box 
@@ -137,6 +147,8 @@ class INR(nn.Module):
         if TYPE_CHECKING:
             self.bounding_box: torch.Tensor
         self.register_buffer("bounding_box", bounding_box)
+        self.dataset = dataset
+
         # hash grid encoding
         base_resolution, n_levels = compute_resolution_nlevel(
             self.bounding_box,
@@ -157,16 +169,31 @@ class INR(nn.Module):
                                                 # Low res -> high res, low freq -> high freq
             dtype=args.dtype,
         )
+        
+        self.o_inr = args.o_inr
         # density net
-        self.density_net = build_network(
-            n_input_dims=n_levels * args.n_features_per_level,
-            n_output_dims=1 + args.n_features_z,
-            activation="ReLU",
-            output_activation="None",
-            n_neurons=args.width,
-            n_hidden_layers=args.depth,
-            dtype=torch.float32 if args.img_reg_autodiff else args.dtype,
-        )
+        if self.o_inr:   
+            self.density_net = volumeNet(
+                None,
+                None,
+                inchannel=n_levels * args.n_features_per_level,
+                outchannel=1 + args.n_features_z,
+                learnable_wave=None,
+                transform=None,
+                mode=None
+            )
+            self.forward = self._volume_forward
+        else:
+            self.density_net = build_network(
+                n_input_dims=n_levels * args.n_features_per_level,
+                n_output_dims=1 + args.n_features_z,
+                activation="ReLU",
+                output_activation="None",
+                n_neurons=args.width,
+                n_hidden_layers=args.depth,
+                dtype=torch.float32 if args.img_reg_autodiff else args.dtype,
+            ) 
+
         # logging
         logging.debug(
             "hyperparameters for hash grid encoding: "
@@ -186,25 +213,80 @@ class INR(nn.Module):
             self.bounding_box[0, 2],
             self.bounding_box[1, 2],
         )
+    
+    def _volume_forward(self,
+                        xyz: torch.Tensor,
+                        values: Optional[torch.Tensor] = None,
+                        ):
+        """
+        Args: 
+            xyz: (npoints, 3)
+            se: (npoints, 16)
+            values: (npoints, ) GT density values NOTE: not used to accumulate gt currently
+        """
+        if self.training and values is None:
+            Warning.warn(" In training but values not provided to forward, overlapping intensities won't be averaged!")
+            
+        self.avg_neighbors = values != None
+        if self.avg_neighbors:
+            vol_in, xyz_idx_unique, mask, xyz_grid_unique, v_gt = self.dataset.match_grid(xyz, values)
+            self.v_gt = v_gt
+            self.xyz_idx_unique = xyz_idx_unique
+        else:
+            vol_in, xyz_idx_unique, mask, xyz_grid_unique, inv_idx = self.dataset.match_grid(xyz)
+            # For inference, do not remove overlapping points
+            self.xyz_idx_unique = xyz_idx_unique # original array -> unique value array. 
+            self.overlap_select = inv_idx # unique value array -> original array. shape = (npoints, )
+            
+        assert vol_in.shape[:-1] == mask.shape and vol_in.shape[-1] == 3 and len(vol_in.shape) == 4
+        
+        # hash grid encoding
+        prefix_shape = vol_in.shape[:-1]
+        vol_in = vol_in.reshape(-1, 3)
+        vol_in = self.encoding(vol_in).reshape(prefix_shape + (-1,))
+        pe = vol_in[xyz_grid_unique[:, 0], xyz_grid_unique[:, 1], xyz_grid_unique[:, 2]]
+        
+        # 3D conv
+        if not self.training:
+            pe = pe.to(dtype=vol_in.dtype)
+        vol_in = vol_in.unsqueeze(0).permute(0, 4, 1, 2, 3) # (1, encoding_dim, x, y, z)
+        z = self.density_net(vol_in)
+        z = z.permute(0, 2, 3, 4, 1).squeeze()
+        
+        # volume to points
+        z = z[xyz_grid_unique[:, 0], xyz_grid_unique[:, 1], xyz_grid_unique[:, 2]]
+        density = F.softplus(z[:, 0]) 
+        assert len(density) == len(xyz_grid_unique), "each unique point should have a density value"
+        
 
-    def forward(self, x: torch.Tensor):
+        if not self.avg_neighbors:
+            # unique array -> original array; duplicates filled with the value of the first occurence
+            assert len(self.overlap_select == len(xyz)), "inverse indices should map unique values to original array"
+            pe = pe[self.overlap_select]
+            z = z[self.overlap_select]
+            density = density[self.overlap_select]
+            
+        if self.training:
+            return density, pe, z
+        return density
+
+    def forward(self, x: torch.Tensor, **kwargs):
+
+        # normalize coordinates to [0, 1]
         x = (x - self.bounding_box[0]) / (self.bounding_box[1] - self.bounding_box[0])
-        # breakpoint()
-        prefix_shape = x.shape[:-1] # (batch_size, n_psf_samples)
+        prefix_shape = x.shape[:-1] # (batch_size, n_psf_samples, 3)
         x = x.view(-1, x.shape[-1])
-        pe = self.encoding(x)
-        # @wenxuan NOTE: Can construct the volume after hash encoding!
-         
-        # The density net takes encodings at all levels, but the other two
-        # split them
+        pe = self.encoding(x)  
+
+        # The density net takes encodings at all levels, 
+        # but the other two MLPs split them
         if not self.training:
             pe = pe.to(dtype=x.dtype)
         z = self.density_net(pe)
         density = F.softplus(z[..., 0].view(prefix_shape))
         if self.training:
             return density, pe, z
-        else:
-            return density
+        return density
 
     def sample_batch(
         self,
@@ -302,6 +384,7 @@ class NeSVoR(nn.Module):
         bounding_box: torch.Tensor,
         spatial_scaling: float,
         args: Namespace,
+        dataset: Optional[PointDataset] = None,
     ) -> None:
         super().__init__()
         if "cpu" in str(args.device):  # CPU mode
@@ -310,6 +393,7 @@ class NeSVoR(nn.Module):
         else:
             # set default GPU for tinycudann
             torch.cuda.set_device(args.device)
+        self.dataset = dataset
         self.spatial_scaling = spatial_scaling
         self.args = args
         self.n_slices = 0
@@ -317,9 +401,12 @@ class NeSVoR(nn.Module):
         self.transformation = transformation
         self.psf_sigma = resolution2sigma(resolution, isotropic=False)
         self.delta = args.delta * v_mean
+        
         self.build_network(bounding_box)
         self.to(args.device)
-
+        
+        if self.args.o_inr:
+            self.args.n_samples = 1 # set PSF to perturbe only the current point
     @property
     def transformation(self) -> RigidTransform:
         return RigidTransform(self.axisangle.detach(), self.trans_first)
@@ -357,9 +444,8 @@ class NeSVoR(nn.Module):
                 self.n_slices, self.args.n_features_deform
             )
             self.deform_net = DeformNet(bounding_box, self.args, self.spatial_scaling)
-        # @wenxuan: replace INR here
-        # INR
-        self.inr = INR(bounding_box, self.args, self.spatial_scaling)
+        
+        self.inr = INR(bounding_box, self.args, self.spatial_scaling, self.dataset)
         # sigma net
         if not self.args.no_pixel_variance:
             self.sigma_net = build_network(
@@ -384,6 +470,43 @@ class NeSVoR(nn.Module):
                 dtype=self.args.dtype,
             )
 
+    def net_forward(
+        self,
+        x: torch.Tensor,
+        se: Optional[torch.Tensor] = None,
+        values: Optional[torch.Tensor] = None,
+    ) -> Dict[str, Any]:
+        # map to voxel grid here 
+        use_volume_net = isinstance(self.inr.density_net, volumeNet)
+
+        density, pe, z = self.inr.forward(x, values=values)
+        if use_volume_net:
+            xyz_idx_unique = self.inr.xyz_idx_unique
+        prefix_shape = density.shape
+        results = {"density": density}
+
+        zs = []
+        if se is not None:
+            if use_volume_net:
+                se = se[xyz_idx_unique]
+                if not self.inr.avg_neighbors:
+                    se = se[self.inr.overlap_select]
+            zs.append(se.reshape(-1, se.shape[-1]))
+
+        if self.args.n_levels_bias:
+            pe_bias = pe[
+                ..., : self.args.n_levels_bias * self.args.n_features_per_level
+            ]
+            results["log_bias"] = self.b_net(torch.cat(zs + [pe_bias], -1)).view(
+                prefix_shape
+            )
+
+        if not self.args.no_pixel_variance:
+            zs.append(z[..., 1:])
+            results["log_var"] = self.sigma_net(torch.cat(zs, -1)).view(prefix_shape)
+
+        return results
+    
     def forward(
         self,
         xyz: torch.Tensor,
@@ -402,10 +525,11 @@ class NeSVoR(nn.Module):
         psf_sigma = self.psf_sigma[slice_idx][:, None]
         # transform points
         t = self.axisangle[slice_idx][:, None]
-        # @wenxuan: map slice coordinates to 3D coordinates
+
+        #NOTE: different from xyz_transformed in dataset if centering used
         xyz = ax_transform_points(
             t, xyz[:, None] + xyz_psf * psf_sigma, self.trans_first
-        )
+        ).squeeze()
 
         # deform
         xyz_ori = xyz
@@ -418,9 +542,21 @@ class NeSVoR(nn.Module):
             se = self.slice_embedding(slice_idx)[:, None].expand(-1, n_samples, -1)
         else:
             se = None
-        # breakpoint()
-        # forward
-        results = self.net_forward(xyz, se)
+
+        results = self.net_forward(xyz, se, values=v)
+        # select indices with non-duplicate coordinates
+        if self.args.o_inr:
+            xyz_idx_unique = self.inr.xyz_idx_unique
+            se = se[xyz_idx_unique]
+            slice_idx = slice_idx[xyz_idx_unique]
+            if self.inr.avg_neighbors:
+                v = self.inr.v_gt # averaged neighboring (overlapping) intensities
+            else:
+                v = v[xyz_idx_unique][self.inr.overlap_select]
+                se = se[self.inr.overlap_select]
+                density = density[self.inr.overlap_select]
+            
+
         # output
         density = results["density"]
         if "log_bias" in results:
@@ -442,6 +578,7 @@ class NeSVoR(nn.Module):
             c: Any = F.softmax(self.logit_coef, 0)[slice_idx] * self.n_slices
         else:
             c = 1
+
         v_out = (bias * density).mean(-1)
         v_out = c * v_out
         if not self.args.no_pixel_variance:
@@ -452,7 +589,18 @@ class NeSVoR(nn.Module):
         if not self.args.no_slice_variance:
             var = var + self.log_var_slice.exp()[slice_idx]
         # losses
+        # breakpoint()
+        # eq (12)
         losses = {D_LOSS: ((v_out - v) ** 2 / (2 * var)).mean()}
+        with open(f"/nobackup/wenxuan/learnable_wavelet/NeSVoR/{self.args.output_volume.strip('nii.gz')}_debug.txt", "a") as f:
+            string = f"model mean var: {var.mean().item()} | "
+            string += f"model mean pixel value: {v_out.mean().item()} | "
+            string += f"model mean bias: {bias.mean().item()}"
+            string += f"model mean density: {density.mean().item()}"
+            string += "\n"
+            f.write(string)
+            
+                
         if not (self.args.no_pixel_variance and self.args.no_slice_variance):
             losses[S_LOSS] = 0.5 * var.log().mean()
             losses[DS_LOSS] = losses[D_LOSS] + losses[S_LOSS]
@@ -469,32 +617,6 @@ class NeSVoR(nn.Module):
 
         return losses
 
-    def net_forward(
-        self,
-        x: torch.Tensor,
-        se: Optional[torch.Tensor] = None,
-    ) -> Dict[str, Any]:
-        density, pe, z = self.inr(x)
-        prefix_shape = density.shape
-        results = {"density": density}
-
-        zs = []
-        if se is not None:
-            zs.append(se.reshape(-1, se.shape[-1]))
-
-        if self.args.n_levels_bias:
-            pe_bias = pe[
-                ..., : self.args.n_levels_bias * self.args.n_features_per_level
-            ]
-            results["log_bias"] = self.b_net(torch.cat(zs + [pe_bias], -1)).view(
-                prefix_shape
-            )
-
-        if not self.args.no_pixel_variance:
-            zs.append(z[..., 1:])
-            results["log_var"] = self.sigma_net(torch.cat(zs, -1)).view(prefix_shape)
-
-        return results
 
     def trans_loss(self, trans_first: bool = True) -> torch.Tensor:
         x = RigidTransform(self.axisangle, trans_first=trans_first)
@@ -519,6 +641,7 @@ class NeSVoR(nn.Module):
             )
             grad2 = grad.pow(2)
         else:
+            # eq (15). Won't work for O-INR since aren't extra PSF sampled points
             xyz = xyz * self.spatial_scaling
             d_density = density - torch.flip(density, (1,))
             dx2 = ((xyz - torch.flip(xyz, (1,))) ** 2).sum(-1) + 1e-6

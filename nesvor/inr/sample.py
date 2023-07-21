@@ -5,7 +5,7 @@ from ..transform import transform_points, RigidTransform
 from ..image import Slice, Volume, load_volume, load_mask
 from .models import INR
 from ..utils import resolution2sigma, meshgrid, PathType
-
+from .net_v3 import volumeNet
 
 def override_sample_mask(
     mask: Volume,
@@ -45,13 +45,17 @@ def sample_volume(
 ) -> Volume:
     model.eval()
     img = mask.clone()
+    use_volume_net = isinstance(model.density_net, volumeNet)
+    # @wenxuan: draw a bounding box around the mask
     img.image[img.mask] = sample_points(
         model,
         img.xyz_masked,
         psf_resolution,
         batch_size,
         n_samples,
+        use_volume_net,
     )
+        
     return img
 
 
@@ -61,11 +65,16 @@ def sample_points(
     resolution: float = 0,
     batch_size: int = 1024,
     n_samples: int = 128,
+    use_volume_net: bool = False,
 ) -> torch.Tensor:
     shape = xyz.shape[:-1]
     xyz = xyz.view(-1, 3)
     v = torch.empty(xyz.shape[0], dtype=torch.float32, device=xyz.device)
+    if use_volume_net:
+        batch_size = len(xyz) 
+        n_samples = 1
     with torch.no_grad():
+        # @wenxuan: sample in batches as in training
         for i in range(0, xyz.shape[0], batch_size):
             xyz_batch = xyz[i : i + batch_size]
             xyz_batch = model.sample_batch(
@@ -73,8 +82,11 @@ def sample_points(
                 None,
                 resolution2sigma(resolution, isotropic=True),
                 0 if resolution <= 0 else n_samples,
-            )
-            v_b = model(xyz_batch).mean(-1)
+            ).squeeze()
+            if not use_volume_net:
+                v_b = model(xyz_batch).mean(-1) # v is 1D otherwise
+            else:
+                v_b = model(xyz_batch)
             v[i : i + batch_size] = v_b
     return v.view(shape)
 

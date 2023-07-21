@@ -80,8 +80,8 @@ def volume2stacks(paths, out_dir=None, gap=3, stack_res=0.8, simulated_res=1.5):
 
         # Extract 3 orthogonal stacks
         angles = [
-            [1.57079633, 0., 0.], #Got 90 degree LOL after all the exhaustive search for angles
-            [0., 1.57079633, 0.],
+            [1.57079633, 0., 0.],
+            [0., 3.1415926, 0.],
             [0., 0., 1.57079633]
             ]
         stacks, transforms, volume, params = \
@@ -141,5 +141,5 @@ if __name__ == "__main__":
     # paths = ["ADNI/adcp_alldata_location2/ADCP_harmonization/ADCP_1005/T1w_acpc_dc_restore_1mm.nii.gz"]
     # volume2stacks(paths, stack_res=1.0, gap=2)
 
-    paths = ["feta/sub-001/anat/sub-001_rec-mial_T2w.nii.gz"]
+    paths = ["feta/sub-004/anat/sub-004_rec-mial_T2w.nii.gz"]
     volume2stacks(paths, stack_res=0.8, gap=3, simulated_res=1.6)

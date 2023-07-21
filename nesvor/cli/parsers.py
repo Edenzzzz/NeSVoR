@@ -12,6 +12,11 @@ def build_parser_training() -> argparse.ArgumentParser:
     """arguments related to the training of INR"""
     _parser = argparse.ArgumentParser(add_help=False)
     parser = _parser.add_argument_group("model architecture")
+    parser.add_argument(
+        "--o-inr",
+        action="store_true",
+        help="Use O-INR instead of INR to regress intensity.",
+        )
     # hash grid encoding
     parser.add_argument(
         "--n-features-per-level",

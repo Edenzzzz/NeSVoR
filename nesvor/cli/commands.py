@@ -15,6 +15,7 @@ from ..utils import makedirs, log_args, log_result
 from ..preprocessing import n4_bias_field_correction, assess, brain_segmentation
 from ..segmentation import twai
 from ..svr import slice_to_volume_reconstruction
+import itertools
 
 "base of commands"
 
@@ -148,9 +149,11 @@ class Reconstruct(Command):
                     self.args, input_dict["input_stacks"], False
                 )
             self.new_timer("Registration")
-            input_dict["input_slices"] = _register(
+            stacks = _register(
                 self.args, input_dict["input_stacks"]
             )
+            input_dict["input_slices"] = stacks2slices(stacks)
+            
         elif "input_slices" in input_dict and input_dict["input_slices"]:
             pass
         else:
@@ -230,7 +233,9 @@ class Register(Command):
         if not ("input_stacks" in input_dict and input_dict["input_stacks"]):
             raise ValueError("No data found!")
         self.new_timer("Registration")
-        slices = _register(self.args, input_dict["input_stacks"])
+
+        stacks = _register(self.args, input_dict["input_stacks"])
+        slices = stacks2slices(stacks)
         self.new_timer("Results saving")
         outputs({"output_slices": slices}, self.args)
 
@@ -366,8 +371,41 @@ def _segment_stack(args: argparse.Namespace, data: List[Stack]) -> List[Stack]:
     )
     return data
 
+def stacks2slices(stacks: List[Stack], attach_to_volume: bool=False) -> List[Slice]:
+    """
+    Args:
+        attach_to_volume: if True, the slices will be attached to a voxel grid
+            on which 3D convolution can be performed.
+    """
+    slices = []
+    # scipy can't compute angle correctly, so hardcoding
+    angle_triplets = torch.tensor([
+            [1.57079633, 0., 0.],
+            [0., 3.1415926, 0.], # (1, 1, 1) -> (-1, 1, -1)
+            [0., 0., 1.57079633]
+            ])
+    
+    stack_sep = []
+    resolution_z = []
+    for idx, stack in enumerate(stacks):
+        idx_nonempty = stack.mask.flatten(1).any(1)
+        stack.rot_angles = angle_triplets[idx]
+        stack.slices /= torch.quantile(stack.slices[stack.mask], 0.99)  # normalize
+        slices.extend(stack[idx_nonempty]) # build slices here and apply masks 
+        
+        if attach_to_volume:
+            # angle_triplets.append(stack.rot_angles)
+            resolution_z.append(stack.thickness)
 
-def _register(args: argparse.Namespace, data: List[Stack]) -> List[Slice]:
+    if attach_to_volume:
+        assert all(resolution_z[0] == r for r in resolution_z), "All stacks should have the same resolution!"
+        thickness = resolution_z[0]
+        assert all( x.dot(y) == 0 for (x, y) in itertools.combinations(angle_triplets, 2) ), "All stacks should be orthogonal!"
+                
+    return slices
+
+            
+def _register(args: argparse.Namespace, data: List[Stack]) -> List[Stack]:
     if args.registration == "svort":
         svort = True
         vvr = True
@@ -391,10 +429,10 @@ def _register(args: argparse.Namespace, data: List[Stack]) -> List[Slice]:
     else:
         raise ValueError("Unkown registration method!")
     force_scanner = args.scanner_space
-    slices = svort_predict(
+    stacks = svort_predict(
         data, args.device, args.svort_version, svort, vvr, force_vvr, force_scanner
     )
-    return slices
+    return stacks
 
 
 def _correct_bias_field(args: argparse.Namespace, stacks: List[Stack]) -> List[Stack]:
@@ -470,7 +508,6 @@ def _sample_inr(
         getattr(args, "output_resolution", None),
         getattr(args, "sample_orientation", None),
     )
-    # breakpoint()
     output_volume = (
         sample_volume(
             model,

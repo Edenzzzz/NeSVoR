@@ -19,7 +19,13 @@ def main() -> None:
             return
     # parse args
     args = parser.parse_args()
-
+    if args.o_inr:
+            model_name = "O_INR"
+    else:
+        model_name = "INR"
+        # insert "args.n_iter" before "nii.gz"
+    args.output_volume = args.output_volume.strip(".nii.gz") + f"_{model_name}_{args.n_iter}_iters.nii.gz"
+    
     run(args)
 
 
