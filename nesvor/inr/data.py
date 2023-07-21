@@ -7,25 +7,6 @@ from ..transform import RigidTransform, transform_points
 from ..image import Volume, Slice
 from typing import Tuple
 
-def unique(x, dim=0, return_counts=False, return_index=True, return_inverse=False):
-	"""
-	torch doesn't implement returning indices of unique values' first occurence
-	"""
-	unique, inverse, counts = torch.unique(x, dim=dim, 
-		sorted=True, return_inverse=True, return_counts=True)
-	# inv_sorted = inverse.argsort(stable=True)
-	inv_sorted = inverse
-	tot_counts = torch.cat((counts.new_zeros(1), counts.cumsum(dim=0)))[:-1]
-	index = inv_sorted[tot_counts]
-	index = index.sort().values
-	return_list = [unique]
-	if return_index:
-		return_list.append(index)
-	if return_counts:
-		return_list.append(counts)
-	if return_inverse:
-		return_list.append(inverse)
-	return return_list
 
 def unique(x, dim=None, return_index=True, return_inverse=False, return_counts=False):
 	"""Unique elements of x and indices of those unique elements
