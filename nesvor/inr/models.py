@@ -552,6 +552,7 @@ class NeSVoR(nn.Module):
             if self.inr.avg_neighbors:
                 v = self.inr.v_gt # averaged neighboring (overlapping) intensities
             else:
+                # expand to original shape by over-selecting the first occurence of each unique coordinate
                 v = v[xyz_idx_unique][self.inr.overlap_select]
                 se = se[self.inr.overlap_select]
                 density = density[self.inr.overlap_select]
@@ -589,7 +590,6 @@ class NeSVoR(nn.Module):
         if not self.args.no_slice_variance:
             var = var + self.log_var_slice.exp()[slice_idx]
         # losses
-        # breakpoint()
         # eq (12)
         losses = {D_LOSS: ((v_out - v) ** 2 / (2 * var)).mean()}
         with open(f"/nobackup/wenxuan/learnable_wavelet/NeSVoR/{self.args.output_volume.strip('nii.gz')}_debug.txt", "a") as f:
