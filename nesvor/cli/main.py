@@ -5,7 +5,7 @@ import sys
 import string
 import logging
 from .parsers import main_parser
-
+import os
 
 def main() -> None:
     parser, subparsers = main_parser()
@@ -19,15 +19,42 @@ def main() -> None:
             return
     # parse args
     args = parser.parse_args()
+
+    ############################
+    # Newly added args for O-INR
+    ############################
     if args.o_inr:
             model_name = "O_INR"
     else:
         model_name = "INR"
-        # insert "args.n_iter" before "nii.gz"
-    args.output_volume = args.output_volume.strip(".nii.gz") + f"_{model_name}_{args.n_iter}_iters.nii.gz"
-    
-    run(args)
 
+    # setup log folder
+    splited = args.output_volume.split("/")
+    dir, name = "/".join(splited[:-1]), splited[-1]
+    name = name.strip(".nii.gz") + f"_{model_name}_{args.n_iter}_iters"
+    dir = os.path.join(dir, name)
+
+    name +=  ".nii.gz" 
+    os.makedirs(dir, exist_ok=True)
+
+    args.log_dir = dir
+    args.output_volume = os.path.join(dir, name)
+    args.mem_log = os.path.join(dir, "memory_cost.txt")
+    args.debug_log = os.path.join(dir, "debug.txt")
+    if os.path.exists(args.mem_log):
+        os.remove(args.mem_log)
+    if os.path.exists(args.debug_log):
+        os.remove(args.debug_log)
+        
+    if not args.o_inr:
+        # save hash grid for O-INR training 
+        args.save_hash = True
+    else:
+        args.save_hash = False
+        
+    
+
+    run(args)
 
 def run(args) -> None:
     import torch

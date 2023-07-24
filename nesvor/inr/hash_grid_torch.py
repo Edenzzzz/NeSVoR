@@ -107,6 +107,7 @@ class HashEmbedder(nn.Module):
         xyz = xyz * resolution
         voxel_min_vertex = torch.floor(xyz).int()
         voxel_indices = voxel_min_vertex.unsqueeze(1) + self.box_offsets
+        # get hash value of all 8 vertices of the voxel
         hashed_voxel_indices = _hash(voxel_indices, self.log2_hashmap_size)
 
         return voxel_min_vertex, hashed_voxel_indices, xyz

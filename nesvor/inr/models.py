@@ -10,17 +10,18 @@ from ..transform import RigidTransform, ax_transform_points, mat_transform_point
 from ..utils import resolution2sigma
 from .net_v3 import volumeNet
 from .data import PointDataset
-
-USE_TORCH = False
-
+import os
+from pytorch_memlab import profile, MemReporter
+from .utils import *
+USE_TORCH = True
+    
 if not USE_TORCH:
     try:
         import tinycudann as tcnn
     except:
         logging.warning("Fail to load tinycudann. Will use pytorch implementation.")
         USE_TORCH = True
-
-
+mem_log = []
 # key for loss/regularization
 D_LOSS = "MSE"
 S_LOSS = "logVar"
@@ -148,6 +149,7 @@ class INR(nn.Module):
             self.bounding_box: torch.Tensor
         self.register_buffer("bounding_box", bounding_box)
         self.dataset = dataset
+        self.args = args
 
         # hash grid encoding
         base_resolution, n_levels = compute_resolution_nlevel(
@@ -164,8 +166,8 @@ class INR(nn.Module):
             n_levels=n_levels,
             n_features_per_level=args.n_features_per_level,
             log2_hashmap_size=args.log2_hashmap_size,
-            base_resolution=base_resolution,    # @wenxuan
-            per_level_scale=args.level_scale,   # the resolution/grid size multiplier between levels, by which coords are multiplied 
+            base_resolution=base_resolution,   
+            per_level_scale=args.level_scale,   # @wenxuan: the resolution/grid size multiplier between levels, by which coords are multiplied 
                                                 # Low res -> high res, low freq -> high freq
             dtype=args.dtype,
         )
@@ -213,7 +215,33 @@ class INR(nn.Module):
             self.bounding_box[0, 2],
             self.bounding_box[1, 2],
         )
+
+
+    def points2volume(self, xyz, values=None):
+        self.avg_neighbors = values != None
+        if self.avg_neighbors:
+            vol_in, xyz_idx_unique, xyz, v_gt = self.dataset.match_grid(xyz, values)
+            self.v_gt = v_gt
+            self.xyz_idx_unique = xyz_idx_unique
+        else:
+            # do not accumulate values for overlapping points
+            vol_in, xyz_idx_unique, xyz, inv_idx = self.dataset.match_grid(xyz)
+            self.xyz_idx_unique = xyz_idx_unique # original array -> unique value array. 
+            self.duplicate_select = inv_idx # unique value array -> original array. shape = (npoints, )
+        del values
+
+        # hash grid encoding
+        prefix_shape = vol_in.shape[:-1]
+        breakpoint()
+        vol_in = vol_in.reshape(-1, 3)
+        vol_in = self.encoding(vol_in).reshape(prefix_shape + (-1,))
+        pe = vol_in[xyz[:, 0], xyz[:, 1], xyz[:, 2]]
+
+        if self.avg_neighbors:
+            return pe, vol_in, xyz
+        return pe, vol_in, xyz
     
+
     def _volume_forward(self,
                         xyz: torch.Tensor,
                         values: Optional[torch.Tensor] = None,
@@ -227,56 +255,45 @@ class INR(nn.Module):
         if self.training and values is None:
             Warning.warn(" In training but values not provided to forward, overlapping intensities won't be averaged!")
             
-        self.avg_neighbors = values != None
-        if self.avg_neighbors:
-            vol_in, xyz_idx_unique, mask, xyz_grid_unique, v_gt = self.dataset.match_grid(xyz, values)
-            self.v_gt = v_gt
-            self.xyz_idx_unique = xyz_idx_unique
-        else:
-            vol_in, xyz_idx_unique, mask, xyz_grid_unique, inv_idx = self.dataset.match_grid(xyz)
-            # For inference, do not remove overlapping points
-            self.xyz_idx_unique = xyz_idx_unique # original array -> unique value array. 
-            self.overlap_select = inv_idx # unique value array -> original array. shape = (npoints, )
-            
-        assert vol_in.shape[:-1] == mask.shape and vol_in.shape[-1] == 3 and len(vol_in.shape) == 4
-        
-        # hash grid encoding
-        prefix_shape = vol_in.shape[:-1]
-        vol_in = vol_in.reshape(-1, 3)
-        vol_in = self.encoding(vol_in).reshape(prefix_shape + (-1,))
-        pe = vol_in[xyz_grid_unique[:, 0], xyz_grid_unique[:, 1], xyz_grid_unique[:, 2]]
-        
+        pe, vol_in, xyz_grid_unique = self.points2volume(xyz, values)
+
         # 3D conv
         if not self.training:
             pe = pe.to(dtype=vol_in.dtype)
+        breakpoint()
         vol_in = vol_in.unsqueeze(0).permute(0, 4, 1, 2, 3) # (1, encoding_dim, x, y, z)
-        z = self.density_net(vol_in)
+        z = self.density_net(vol_in); del vol_in
         z = z.permute(0, 2, 3, 4, 1).squeeze()
         
         # volume to points
         z = z[xyz_grid_unique[:, 0], xyz_grid_unique[:, 1], xyz_grid_unique[:, 2]]
-        density = F.softplus(z[:, 0]) 
+        density = F.softplus(z[:, 0])
         assert len(density) == len(xyz_grid_unique), "each unique point should have a density value"
         
-
+        
+        # unique array -> original array; duplicates filled with the value of the first occurence
         if not self.avg_neighbors:
-            # unique array -> original array; duplicates filled with the value of the first occurence
-            assert len(self.overlap_select == len(xyz)), "inverse indices should map unique values to original array"
-            pe = pe[self.overlap_select]
-            z = z[self.overlap_select]
-            density = density[self.overlap_select]
+            pe = pe[self.duplicate_select]
+            z = z[self.duplicate_select]
+            density = density[self.duplicate_select]
             
         if self.training:
             return density, pe, z
         return density
 
-    def forward(self, x: torch.Tensor, **kwargs):
 
-        # normalize coordinates to [0, 1]
-        x = (x - self.bounding_box[0]) / (self.bounding_box[1] - self.bounding_box[0])
-        prefix_shape = x.shape[:-1] # (batch_size, n_psf_samples, 3)
-        x = x.view(-1, x.shape[-1])
-        pe = self.encoding(x)  
+    def forward(self, x: torch.Tensor, **kwargs):
+        if not self.args.use_voxel:
+            # normalize coordinates to [0, 1]
+            x = (x - self.bounding_box[0]) / (self.bounding_box[1] - self.bounding_box[0])
+            prefix_shape = x.shape[:-1] # (batch_size, n_psf_samples, 3)
+            x = x.view(-1, x.shape[-1])
+            pe = self.encoding(x)
+        else:
+            pe, _, _ = self.points2volume(x)
+            # fill overlapping points with the value of the first occurence
+            pe = pe[self.xyz_idx_unique][self.duplicate_select]
+
 
         # The density net takes encodings at all levels, 
         # but the other two MLPs split them
@@ -328,18 +345,23 @@ class DeformNet(nn.Module):
             spatial_scaling,
         )
         level_scale = args.level_scale_deform
+        
+        hash_path = os.path.join(self.args.log_dir, "hash_grid.pt")
+        if args.save_hash:
+            self.encoding = build_encoding(
+                n_input_dims=3,
+                otype="HashGrid",
+                n_levels=n_levels,
+                n_features_per_level=args.n_features_per_level_deform,
+                log2_hashmap_size=args.log2_hashmap_size,
+                base_resolution=base_resolution,
+                per_level_scale=level_scale,
+                dtype=args.dtype,
+                interpolation="Smoothstep",
+            )
+        elif os.path.exists(hash_path):
+            self.encoding = torch.load(hash_path)
 
-        self.encoding = build_encoding(
-            n_input_dims=3,
-            otype="HashGrid",
-            n_levels=n_levels,
-            n_features_per_level=args.n_features_per_level_deform,
-            log2_hashmap_size=args.log2_hashmap_size,
-            base_resolution=base_resolution,
-            per_level_scale=level_scale,
-            dtype=args.dtype,
-            interpolation="Smoothstep",
-        )
         self.deform_net = build_network(
             n_input_dims=n_levels * args.n_features_per_level_deform
             + args.n_features_deform,
@@ -401,8 +423,8 @@ class NeSVoR(nn.Module):
         self.transformation = transformation
         self.psf_sigma = resolution2sigma(resolution, isotropic=False)
         self.delta = args.delta * v_mean
-        
         self.build_network(bounding_box)
+        self.reporter = MemReporter(self.inr)
         self.to(args.device)
         
         if self.args.o_inr:
@@ -480,6 +502,8 @@ class NeSVoR(nn.Module):
         use_volume_net = isinstance(self.inr.density_net, volumeNet)
 
         density, pe, z = self.inr.forward(x, values=values)
+        del x, values
+
         if use_volume_net:
             xyz_idx_unique = self.inr.xyz_idx_unique
         prefix_shape = density.shape
@@ -490,16 +514,18 @@ class NeSVoR(nn.Module):
             if use_volume_net:
                 se = se[xyz_idx_unique]
                 if not self.inr.avg_neighbors:
-                    se = se[self.inr.overlap_select]
+                    se = se[self.inr.duplicate_select]
             zs.append(se.reshape(-1, se.shape[-1]))
 
         if self.args.n_levels_bias:
             pe_bias = pe[
                 ..., : self.args.n_levels_bias * self.args.n_features_per_level
             ]
+
             results["log_bias"] = self.b_net(torch.cat(zs + [pe_bias], -1)).view(
                 prefix_shape
             )
+            del pe_bias, pe
 
         if not self.args.no_pixel_variance:
             zs.append(z[..., 1:])
@@ -507,6 +533,7 @@ class NeSVoR(nn.Module):
 
         return results
     
+    @torch.autocast("cuda")
     def forward(
         self,
         xyz: torch.Tensor,
@@ -542,8 +569,8 @@ class NeSVoR(nn.Module):
             se = self.slice_embedding(slice_idx)[:, None].expand(-1, n_samples, -1)
         else:
             se = None
-
         results = self.net_forward(xyz, se, values=v)
+
         # select indices with non-duplicate coordinates
         if self.args.o_inr:
             xyz_idx_unique = self.inr.xyz_idx_unique
@@ -553,11 +580,10 @@ class NeSVoR(nn.Module):
                 v = self.inr.v_gt # averaged neighboring (overlapping) intensities
             else:
                 # expand to original shape by over-selecting the first occurence of each unique coordinate
-                v = v[xyz_idx_unique][self.inr.overlap_select]
-                se = se[self.inr.overlap_select]
-                density = density[self.inr.overlap_select]
+                v = v[xyz_idx_unique][self.inr.duplicate_select]
+                se = se[self.inr.duplicate_select]
+                density = density[self.inr.duplicate_select]
             
-
         # output
         density = results["density"]
         if "log_bias" in results:
@@ -583,7 +609,7 @@ class NeSVoR(nn.Module):
         v_out = (bias * density).mean(-1)
         v_out = c * v_out
         if not self.args.no_pixel_variance:
-            # var = (bias_detach * psf * var).mean(-1)
+            # NOTE: The mean variance over PSF dim
             var = (bias_detach * var).mean(-1)
             var = c.detach() * var
             var = var**2
@@ -592,7 +618,9 @@ class NeSVoR(nn.Module):
         # losses
         # eq (12)
         losses = {D_LOSS: ((v_out - v) ** 2 / (2 * var)).mean()}
-        with open(f"/nobackup/wenxuan/learnable_wavelet/NeSVoR/{self.args.output_volume.strip('nii.gz')}_debug.txt", "a") as f:
+
+        # save debug log
+        with open(self.args.debug_log, "a") as f:
             string = f"model mean var: {var.mean().item()} | "
             string += f"model mean pixel value: {v_out.mean().item()} | "
             string += f"model mean bias: {bias.mean().item()}"
@@ -615,6 +643,14 @@ class NeSVoR(nn.Module):
         # image regularization
         losses[I_REG] = self.img_reg(density, xyz)
 
+        
+        global mem_log
+        mem_log += [byte2mb(torch.cuda.memory_allocated())]
+        if len(mem_log) == 10:
+            with open(self.args.mem_log, "a") as f:
+                f.write(f"CUDA memory cost:  {sum(mem_log) / len(mem_log)}, MB\n")
+                mem_log.clear()
+            
         return losses
 
 

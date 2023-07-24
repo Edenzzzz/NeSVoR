@@ -32,12 +32,8 @@ class volumeNet(nn.Module):
 		self.approx_conv3 = nn.Conv3d(128, 128, 3, 1, padding='same')
 		self.approx_conv4 = nn.Conv3d(128, 64, 3, 1, padding='same')
 		self.approx_conv5 = nn.Conv3d(64, outchannel, 3, 1, padding='same')
-
-	def forward(self, x, verbose=False, autocast=False):
-		return self._forward(x)
 	
-	@torch.autocast("cuda")
-	def _forward(self, x):
+	def forward(self, x):
 		la = x
 		la = self.approx_conv1(la)
 		# la = F.relu(la)

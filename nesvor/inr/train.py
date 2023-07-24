@@ -10,12 +10,12 @@ from .models import INR, NeSVoR, D_LOSS, S_LOSS, DS_LOSS, I_REG, B_REG, T_REG, D
 from ..transform import RigidTransform
 from ..image import Volume, Slice
 from .data import PointDataset
+from .utils import byte2mb, unique
 
-
-def train(slices: List[Slice], args: Namespace) -> Tuple[INR, List[Slice], Volume]:
+def train(slices: List[Slice], args: Namespace) -> Tuple[NeSVoR, List[Slice], Volume]:
     # create training dataset
     dataset = PointDataset(slices, args)
-    if args.o_inr:
+    if args.o_inr or args.use_voxel:
         args.batch_size = dataset.xyz.shape[0] # @wenxuan: use all points for O-INR
         args.image_regularization = "none"
         
@@ -47,6 +47,7 @@ def train(slices: List[Slice], args: Namespace) -> Tuple[INR, List[Slice], Volum
         args,
         dataset=dataset
     )
+
     # setup optimizer
     params_net = []
     params_encoding = []
@@ -177,4 +178,4 @@ def train(slices: List[Slice], args: Namespace) -> Tuple[INR, List[Slice], Volum
         output_slice = slices[i].clone()
         output_slice.transformation = transformation[i]
         output_slices.append(output_slice)
-    return model.inr, output_slices, mask
+    return model, output_slices, mask

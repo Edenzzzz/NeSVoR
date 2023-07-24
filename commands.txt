@@ -17,5 +17,5 @@ nesvor reconstruct \
 --output-volume volumes/feta_sub-001_rec_gap=3.nii.gz \
 --bias-field-correction \
 --registration svort \
---metric ncc
-
+--metric ncc \
+--n-levels-bias 4 \

@@ -6,39 +6,9 @@ from ..utils import gaussian_blur
 from ..transform import RigidTransform, transform_points
 from ..image import Volume, Slice
 from typing import Tuple
+from .utils import byte2mb, unique
 
 
-def unique(x, dim=None, return_index=True, return_inverse=False, return_counts=False):
-	"""Unique elements of x and indices of those unique elements
-	https://github.com/pytorch/pytorch/issues/36748#issuecomment-619514810
-
-	e.g.
-
-	unique(tensor([
-		[1, 2, 3],
-		[1, 2, 4],
-		[1, 2, 3],
-		[1, 2, 5]
-	]), dim=0)
-	=> (tensor([[1, 2, 3],
-				[1, 2, 4],
-				[1, 2, 5]]),
-		tensor([0, 1, 3]))
-	"""
-	unique, inverse, counts = torch.unique(
-		x, sorted=True, return_inverse=True, dim=dim, return_counts=True)
-
-	perm = torch.arange(inverse.size(0), dtype=inverse.dtype,
-						device=inverse.device)
-	inv_flipped, perm = inverse.flip([0]), perm.flip([0])
-	return_list = [unique]
-	if return_index:
-		return_list.append(inv_flipped.new_empty(unique.size(0)).scatter(0, inv_flipped, perm))
-	if return_counts:
-		return_list.append(counts)
-	if return_inverse:
-		return_list.append(inverse)
-	return return_list
 
 class PointDataset(object):
 	def __init__(self, slices: List[Slice], args) -> None:
@@ -93,24 +63,27 @@ class PointDataset(object):
 		bounding_box = torch.stack([xyz_transformed.amin(0), xyz_transformed.amax(0)], 0)
 		return bounding_box
 	
-	def get_voxel_grid(self, res_new=0.8) -> Tuple[torch.Tensor, torch.Tensor]:
+	def get_voxel_grid(self, pad_len, res_new=0.8) -> Tuple[torch.Tensor, torch.Tensor]:
 		"""
 		Simulate the original voxel grid (coordinates) where stacks are extracted
 		Args:
 			res_new: resolution of the new voxel grid 
 		"""
-		max_r = self.resolution.max()
+		device = self.resolution.device
+		
 		xyz_span = self.orig_vol_shape
 		xyz_span = (xyz_span * res_new).ceil().int()
-		device = self.resolution.device
+		xyz_span = (xyz_span + pad_len * 2).int().tolist()
 
-		# will leave the boundary part out
-		pad_len = max_r * 2# pad pad_len on each side
-		volume = torch.empty((xyz_span + pad_len * 2).int().tolist(), device=device)
-		# init mask as all zeros    
-		mask = torch.zeros_like(volume, device=device)
+		vol_gt = torch.empty(xyz_span, device=device)
+		mask = torch.zeros_like(vol_gt, device=device)
+
+		# create normalized coordinate grid
+		tensors = (torch.linspace(-1, 1, steps=xyz_span[0]), torch.linspace(-1, 1, steps=xyz_span[1]), torch.linspace(-1, 1, steps=xyz_span[2]))
+		vol_in = torch.stack(torch.meshgrid(*tensors), dim=-1).to(device)
 		
-		return volume, mask, pad_len
+		return vol_in, vol_gt, mask
+
 
 	def match_grid(self, xyz: torch.Tensor, values: torch.Tensor=None) \
 		-> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -124,15 +97,15 @@ class PointDataset(object):
 		
 		# leave the edge part out
 		avg_neighbors = values != None
-
+		prefix_shape = xyz.shape[:-1]
+		xyz = xyz.reshape(-1, 3)
 		device = self.resolution.device
+		pad_len = self.resolution.max()
+
 		xyz_span_current = self.bounding_box[1] - self.bounding_box[0] 
-		voxel_grid_gt, mask, pad_len = self.get_voxel_grid()
+		voxel_grid_in, voxel_grid_gt, mask = self.get_voxel_grid(pad_len)
 		xyz_span_dest = voxel_grid_gt.shape	
 
-		# create normalized coordinate grid
-		tensors = (torch.linspace(-1, 1, steps=xyz_span_dest[0]), torch.linspace(-1, 1, steps=xyz_span_dest[1]), torch.linspace(-1, 1, steps=xyz_span_dest[2]))
-		voxel_grid_in = torch.stack(torch.meshgrid(*tensors, indexing="ij"), dim=-1).to(device, non_blocking=True)
 		# avoid index out of bound
 		xyz_span_dest = torch.tensor(xyz_span_dest, device=device) - pad_len * 2
 
@@ -140,23 +113,19 @@ class PointDataset(object):
 		res_ratio = xyz_span_current / xyz_span_dest # get inner box size
 		xyz = (xyz - self.bounding_box[0]) / res_ratio + pad_len # grid coordinates in the inner box
 		
-		# This is similar to RoI Pooling. Some precision is lost
+		# TODO: Replace with trilinear interpolation
 		xyz = xyz.round().int()
-		# clip to voxel_grid_gt.shape
 		xyz = xyz.where(xyz < xyz_span_dest, xyz_span_dest - 1)
-		# set mask to the number of non-zero elements in each voxel
-		xyz_unique, xyz_idx_unique, counts, inv_idx = unique(xyz, return_counts=True, return_inverse=True, dim=0)
-		assert (xyz_unique[inv_idx] == xyz).all() and (xyz[xyz_idx_unique] == xyz_unique).all()
-		xyz_unique = xyz_unique.int()
-		try:
-			mask[xyz_unique[:, 0], xyz_unique[:, 1], xyz_unique[:, 2]] = 1 / counts # rescale output value to account for overlapping points
-		except:
-			breakpoint()
-		# accumulate values on the voxel grid
-		# NOTE: In-place addition with indexing allowing duplicate indices is tricky
-		# See https://discuss.pytorch.org/t/indexing-with-repeating-indices-numpy-add-at/10223/2
-		# Use tensor.index_put_ or _put
 
+		# mask = the number of non-zero elements in each voxel
+		xyz_unique, xyz_idx_unique, counts, inv_idx = unique(xyz, return_counts=True, return_inverse=True, dim=0)
+		assert (xyz_unique[inv_idx] == xyz).all() and (xyz[xyz_idx_unique] == xyz_unique).all() # check if index mapping is correct
+		xyz_unique = xyz_unique.int()
+		mask[xyz_unique[:, 0], xyz_unique[:, 1], xyz_unique[:, 2]] = 1 / counts # rescale output value to account for overlapping points
+
+		# accumulate values on the voxel grid
+		# NOTE: See https://discuss.pytorch.org/t/indexing-with-repeating-indices-numpy-add-at/10223/2
+		# Use tensor.index_put_ or _put
 		if avg_neighbors:
 			xyz = xyz.int()
 			# accumulate values on the voxel grid
@@ -164,13 +133,14 @@ class PointDataset(object):
 			voxel_grid_gt *= mask # average overlapping points
 			v_gt = voxel_grid_gt[xyz_unique[:, 0], xyz_unique[:, 1], xyz_unique[:, 2]] 
 			mask = mask != 0
-			return voxel_grid_in, xyz_idx_unique, mask, xyz_unique, v_gt 
-
+			return voxel_grid_in, xyz_idx_unique, xyz_unique, v_gt 
 		else:
+			# allow duplicate coordinates
 			v_gt = None
 			self.inv_idx = inv_idx
 			mask = mask != 0
-			return voxel_grid_in, xyz_idx_unique, mask, xyz_unique, inv_idx
+			xyz = xyz.reshape(prefix_shape + (3, ))
+			return voxel_grid_in, xyz_idx_unique, xyz, inv_idx
 
 
 

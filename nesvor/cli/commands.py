@@ -16,7 +16,7 @@ from ..preprocessing import n4_bias_field_correction, assess, brain_segmentation
 from ..segmentation import twai
 from ..svr import slice_to_volume_reconstruction
 import itertools
-
+import json
 "base of commands"
 
 
@@ -164,7 +164,17 @@ class Reconstruct(Command):
         input_dict = self.preprocess()
         self.new_timer("Reconsturction")
         model, output_slices, mask = train(input_dict["input_slices"], self.args)
+        
+        # save training params and model components 
+        hash_grid = model.inr.encoding
+        if self.args.save_hash:
+            torch.save(hash_grid, os.path.join(self.args.log_dir, "hash_grid.pt"))
+        args = {key: str(value) for key, value in self.args.__dict__.items()}
+        json.dump(args, open(os.path.join(self.args.log_dir, "args.json"), "w"), indent=4)
+        model = model.inr
+
         self.new_timer("Results saving")
+
         output_volume, simulated_slices = _sample_inr(
             self.args,
             model,
@@ -185,7 +195,9 @@ class Reconstruct(Command):
             },
             self.args,
         )
-
+        # save training args
+        args = {key: str(value) for key, value in self.args.__dict__.items()}
+        json.dump(args, open(os.path.join(self.args.log_dir, "args.json"), "w"), indent=4)
 
 class SampleVolume(Command):
     def exec(self) -> None:
@@ -501,7 +513,7 @@ def _sample_inr(
     return_slices=False,
 ) -> Tuple[Optional[Volume], Optional[List[Slice]]]:
     if return_slices:
-        assert slices_template is not None, "slices tempalte can not be None!"
+        assert slices_template is not None, "slices tempalte can not be None!"        
     mask = override_sample_mask(
         mask,
         getattr(args, "sample_mask", None),

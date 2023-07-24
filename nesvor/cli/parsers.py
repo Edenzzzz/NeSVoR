@@ -13,6 +13,16 @@ def build_parser_training() -> argparse.ArgumentParser:
     _parser = argparse.ArgumentParser(add_help=False)
     parser = _parser.add_argument_group("model architecture")
     parser.add_argument(
+        "--use_voxel",
+        help="Use voxel preprocessing for INR",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--profiling",
+        action="store_true",
+        help="Profiling GPU memory usage of the forward pass",
+    )
+    parser.add_argument(
         "--o-inr",
         action="store_true",
         help="Use O-INR instead of INR to regress intensity.",
