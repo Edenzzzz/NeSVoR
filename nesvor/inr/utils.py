@@ -34,3 +34,14 @@ def unique(x, dim=None, return_index=True, return_inverse=False, return_counts=F
 	if return_inverse:
 		return_list.append(inverse)
 	return return_list
+
+def freeze_params(params: iter):
+	for param in params:
+		param.requires_grad = False
+
+
+def free_memory():
+	import gc
+	import torch
+	gc.collect()
+	torch.cuda.empty_cache()

@@ -5,22 +5,22 @@ Model for 3D INR
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-# from pytorch_wavelets import Learnable2D
 import math
 import os
 import sys
 import pdb
 import pywt
-from pytorch_wavelets import DWTForward, DWTInverse
+from .utils import byte2mb
 
 class volumeNet(nn.Module):
-	def __init__(self, nlevel, wave, inchannel, outchannel, learnable_wave, transform, mode):
+	def __init__(self, nlevel, wave, inchannel, outchannel, learnable_wave, transform, mode, profiling=False):
 		super(volumeNet, self).__init__()
 		self.nlevel = nlevel
 		self.wave = wave
 		self.mode = mode
 		self.learnable_wave = learnable_wave
-		
+		self.profiling = profiling
+
 		self.transform = transform                                          
 		self.inchannel = inchannel
 		self.outchannel = outchannel
@@ -49,4 +49,7 @@ class volumeNet(nn.Module):
 		la = torch.sin(la)
 		la = self.approx_conv5(la)
 		signal = la
+		if self.profiling:
+			print(byte2mb("3D conv memory cost: ", torch.cuda.memory_allocated()), "MB")
+
 		return signal

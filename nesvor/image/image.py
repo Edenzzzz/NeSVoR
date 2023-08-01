@@ -208,8 +208,9 @@ class Image(_Data):
     def xyz_masked_untransformed(self) -> torch.Tensor:
         """
         flip(indices, dims=-1): zyx -> xyz
-        self.shape_xyz: (h, w, 1)
-        self.resolution_xyz: slice thickness along the 3 axes
+        x_world = (
+            x_local * (volume_size - 1) * 0.5 * voxel_size
+            ) - volume_translation,
         """
         
         xyz = torch.flip(torch.nonzero(self.mask), (-1,))  
@@ -276,17 +277,7 @@ class Slice(Image):
             **self._clone_dict(zero, deep),
         )
 
-    # @property
-    # def xyz_masked_volume(self) -> torch.Tensor:
-    #     """
-    #     Return the coordinates of points in the original volume after masking
-    #     """
-    #     xyz = self.xyz_masked_untransformed.round()
-    #     # transpose the z axis the actual axis that's "sliced over"
-    #     rot_matrix = Rotation.from_euler('xyz', self.rot_angles, degrees=True).as_matrix()
-    #     xyz = xyz @ torch.tensor(rot_matrix).to(xyz)
-    #     return xyz
-    
+
     def resample(
         self,
         resolution_new: Union[float, Sequence],

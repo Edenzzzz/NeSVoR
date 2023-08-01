@@ -101,6 +101,7 @@ class HashEmbedder(nn.Module):
             x_embedded_all.append(x_embedded)
         return torch.cat(x_embedded_all, dim=-1)
 
+ 
     def get_voxel_vertices(
         self, xyz: torch.Tensor, resolution: float
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -126,5 +127,5 @@ def _hash(coords: torch.Tensor, log2_hashmap_size: int) -> torch.Tensor:
 
     return (
         torch.tensor((1 << log2_hashmap_size) - 1, device=xor_result.device)
-        & xor_result
+        & xor_result # mod operation with grid size
     )

@@ -15,7 +15,7 @@ from .utils import byte2mb, unique
 def train(slices: List[Slice], args: Namespace) -> Tuple[NeSVoR, List[Slice], Volume]:
     # create training dataset
     dataset = PointDataset(slices, args)
-    if args.o_inr or args.use_voxel:
+    if args.o_inr:
         args.batch_size = dataset.xyz.shape[0] # @wenxuan: use all points for O-INR
         args.image_regularization = "none"
         
@@ -45,7 +45,7 @@ def train(slices: List[Slice], args: Namespace) -> Tuple[NeSVoR, List[Slice], Vo
         (bb - center) / spatial_scaling,
         spatial_scaling,
         args,
-        dataset=dataset
+        dataset.orig_vol_shape
     )
 
     # setup optimizer

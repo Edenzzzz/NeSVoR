@@ -13,6 +13,27 @@ def build_parser_training() -> argparse.ArgumentParser:
     _parser = argparse.ArgumentParser(add_help=False)
     parser = _parser.add_argument_group("model architecture")
     parser.add_argument(
+        "--patchify",
+        action="store_true",
+        help="Whether to use patched input for O-INR",
+    )
+
+    parser.add_argument(
+        "--trilinear",
+        type=eval,
+        default=True,
+        help="Whether to use trilinear interpolation for points2volume",)
+    parser.add_argument(
+        "--hash_path",
+        type=str,
+        help="path of pretrained hash grid encoding",
+    )
+    parser.add_argument(
+        "--notes",
+        type=str,
+        help="Extra notes that will be appended to the folder name"
+    )
+    parser.add_argument(
         "--use_voxel",
         help="Use voxel preprocessing for INR",
         action="store_true",

@@ -96,7 +96,6 @@ def setup_logger(filename: Optional[str], verbose: int) -> None:
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(log_formatter)
     handlers.append(console_handler)
-
     logging.basicConfig(
         handlers=handlers,
         level=level,

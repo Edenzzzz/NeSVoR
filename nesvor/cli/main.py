@@ -8,6 +8,7 @@ from .parsers import main_parser
 import os
 
 def main() -> None:
+
     parser, subparsers = main_parser()
     # print help if no args are provided
     if len(sys.argv) == 1:
@@ -31,12 +32,13 @@ def main() -> None:
     # setup log folder
     splited = args.output_volume.split("/")
     dir, name = "/".join(splited[:-1]), splited[-1]
-    name = name.strip(".nii.gz") + f"_{model_name}_{args.n_iter}_iters"
+    suffix = f"_{args.notes}" if args.notes else ""
+    name = name.strip(".nii.gz") + f"_{model_name}_{args.n_iter}_iters" + suffix
     dir = os.path.join(dir, name)
-
-    name +=  ".nii.gz" 
     os.makedirs(dir, exist_ok=True)
 
+    # setup file names inside
+    name +=  ".nii.gz" 
     args.log_dir = dir
     args.output_volume = os.path.join(dir, name)
     args.mem_log = os.path.join(dir, "memory_cost.txt")
@@ -52,7 +54,7 @@ def main() -> None:
     else:
         args.save_hash = False
         
-    
+    args.output_log = os.path.join(dir, "console_log.txt")    
 
     run(args)
 

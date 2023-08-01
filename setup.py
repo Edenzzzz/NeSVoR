@@ -3,7 +3,7 @@ from torch.utils.cpp_extension import CUDAExtension, BuildExtension
 import os
 import glob
 
-
+import sys
 root_path = os.path.dirname(__file__)
 
 
@@ -62,7 +62,6 @@ def get_entry_points():
         "console_scripts": ["nesvor=nesvor.cli.main:main"],
     }
     return entry_points
-
 
 setup(
     name="nesvor",

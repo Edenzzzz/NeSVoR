@@ -6,15 +6,51 @@ from ..utils import gaussian_blur
 from ..transform import RigidTransform, transform_points
 from ..image import Volume, Slice
 from typing import Tuple
-from .utils import byte2mb, unique
+from pytorch3d.structures import Volumes, Pointclouds
+from pytorch3d.ops import add_pointclouds_to_volumes
+import logging
+import math
+import numpy as np
 
+def unique(x, dim=None, return_index=True, return_inverse=False, return_counts=False):
+	"""Unique elements of x and indices of those unique elements
+	https://github.com/pytorch/pytorch/issues/36748#issuecomment-619514810
 
+	e.g.
+
+	unique(tensor([
+		[1, 2, 3],
+		[1, 2, 4],
+		[1, 2, 3],
+		[1, 2, 5]
+	]), dim=0)
+	=> (tensor([[1, 2, 3],
+				[1, 2, 4],
+				[1, 2, 5]]),
+		tensor([0, 1, 3]))
+	"""
+	unique, inverse, counts = torch.unique(
+		x, sorted=True, return_inverse=True, dim=dim, return_counts=True)
+
+	perm = torch.arange(inverse.size(0), dtype=inverse.dtype,
+						device=inverse.device)
+	inv_flipped, perm = inverse.flip([0]), perm.flip([0])
+	return_list = [unique]
+	if return_index:
+		return_list.append(inv_flipped.new_empty(unique.size(0)).scatter(0, inv_flipped, perm))
+	if return_counts:
+		return_list.append(counts)
+	if return_inverse:
+		return_list.append(inverse)
+	return return_list
 
 class PointDataset(object):
-	def __init__(self, slices: List[Slice], args) -> None:
+	def __init__(self, slices: List[Slice], args, num_patches=5) -> None:
 		self.mask_threshold = 1  # args.mask_threshold
 		self.args = args
-		
+		self.num_patches = num_patches
+		self.patch_idx = np.random.randint(0, num_patches)
+
 		xyz_all = []
 		v_all = []
 		slice_idx_all = []
@@ -44,7 +80,10 @@ class PointDataset(object):
 		self.epoch = 0
 		orig_sidelen = slices[0].shape_xyz.max()
 		self.orig_vol_shape = torch.tensor([orig_sidelen, orig_sidelen, orig_sidelen]).to(self.resolution.device)
-		
+	
+	def reset(self):
+		self.patch_idx = np.random.randint(0, self.num_patches)
+
 	# boundary of the voxel grid used during training.
 	# Later when generating the volume, will use 10 times
 	# the max resolution instead of 2
@@ -63,86 +102,115 @@ class PointDataset(object):
 		bounding_box = torch.stack([xyz_transformed.amin(0), xyz_transformed.amax(0)], 0)
 		return bounding_box
 	
-	def get_voxel_grid(self, pad_len, res_new=0.8) -> Tuple[torch.Tensor, torch.Tensor]:
+	def get_voxel_grid(self, pad_len, new_res, feature_dim) -> Volumes:
 		"""
 		Simulate the original voxel grid (coordinates) where stacks are extracted
 		Args:
-			res_new: resolution of the new voxel grid 
+			new_res: resolution of the new voxel grid 
 		"""
-		device = self.resolution.device
-		
 		xyz_span = self.orig_vol_shape
-		xyz_span = (xyz_span * res_new).ceil().int()
-		xyz_span = (xyz_span + pad_len * 2).int().tolist()
-
-		vol_gt = torch.empty(xyz_span, device=device)
-		mask = torch.zeros_like(vol_gt, device=device)
-
-		# create normalized coordinate grid
-		tensors = (torch.linspace(-1, 1, steps=xyz_span[0]), torch.linspace(-1, 1, steps=xyz_span[1]), torch.linspace(-1, 1, steps=xyz_span[2]))
-		vol_in = torch.stack(torch.meshgrid(*tensors), dim=-1).to(device)
-		
-		return vol_in, vol_gt, mask
-
-
-	def match_grid(self, xyz: torch.Tensor, values: torch.Tensor=None) \
-		-> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-		"""
-		Match final (unscaled) 3D coordinates back to coordinates of the voxel grid.
-		TODO: Implement 3D ROI Align for this 
-		Args: 
-			xyz: (npoints, 3) transformed coordinates for INR training.
-			values: (npoints, ) pixel intensities. Will average neighbors is provided.
-		"""
-		
-		# leave the edge part out
-		avg_neighbors = values != None
-		prefix_shape = xyz.shape[:-1]
-		xyz = xyz.reshape(-1, 3)
+		xyz_span = (xyz_span * new_res).ceil().int()
 		device = self.resolution.device
-		pad_len = self.resolution.max()
 
-		xyz_span_current = self.bounding_box[1] - self.bounding_box[0] 
-		voxel_grid_in, voxel_grid_gt, mask = self.get_voxel_grid(pad_len)
-		xyz_span_dest = voxel_grid_gt.shape	
+		new_size = (xyz_span + pad_len * 2).int().tolist()
+		# (minibatch, densities_dim, height, width, depth)
+		densities = torch.zeros([1, 1] + new_size, dtype=torch.float32, device=device)
+		features = torch.zeros([1, feature_dim] + new_size, dtype=torch.float32, device=device)
+		volume_in = Volumes(densities, features)
 
-		# avoid index out of bound
-		xyz_span_dest = torch.tensor(xyz_span_dest, device=device) - pad_len * 2
+		return volume_in
+
+	def points2grid(self, xyz: torch.Tensor, feature_dim, zero_one: bool=True, new_res=0.9) -> Tuple[torch.Tensor, Volumes]:
+		"""
+		Transform slice coordinates to target grid coordinates 
+		"""
+
+		pad_len = self.resolution.max() 
+		xyz_span_this = self.bounding_box[1] - self.bounding_box[0] 
+		device = self.resolution.device
+		
+		# get voxel grid
+		vol_in = self.get_voxel_grid(pad_len, new_res, feature_dim)
+		xyz_span_dest = vol_in.features().squeeze().shape	# (h, w, l)
+		xyz_span_dest = torch.tensor(xyz_span_dest, device=device) - pad_len * 2 # map to unpadded volume 
 
 		# apply scaling ratio
-		res_ratio = xyz_span_current / xyz_span_dest # get inner box size
-		xyz = (xyz - self.bounding_box[0]) / res_ratio + pad_len # grid coordinates in the inner box
+		res_ratio = xyz_span_this / xyz_span_dest
 		
-		# TODO: Replace with trilinear interpolation
-		xyz = xyz.round().int()
-		xyz = xyz.where(xyz < xyz_span_dest, xyz_span_dest - 1)
-
-		# mask = the number of non-zero elements in each voxel
-		xyz_unique, xyz_idx_unique, counts, inv_idx = unique(xyz, return_counts=True, return_inverse=True, dim=0)
-		assert (xyz_unique[inv_idx] == xyz).all() and (xyz[xyz_idx_unique] == xyz_unique).all() # check if index mapping is correct
-		xyz_unique = xyz_unique.int()
-		mask[xyz_unique[:, 0], xyz_unique[:, 1], xyz_unique[:, 2]] = 1 / counts # rescale output value to account for overlapping points
-
-		# accumulate values on the voxel grid
-		# NOTE: See https://discuss.pytorch.org/t/indexing-with-repeating-indices-numpy-add-at/10223/2
-		# Use tensor.index_put_ or _put
-		if avg_neighbors:
-			xyz = xyz.int()
-			# accumulate values on the voxel grid
-			voxel_grid_gt.index_put_((xyz[:, 0], xyz[:, 1], xyz[:, 2]), values, accumulate=True) 
-			voxel_grid_gt *= mask # average overlapping points
-			v_gt = voxel_grid_gt[xyz_unique[:, 0], xyz_unique[:, 1], xyz_unique[:, 2]] 
-			mask = mask != 0
-			return voxel_grid_in, xyz_idx_unique, xyz_unique, v_gt 
-		else:
-			# allow duplicate coordinates
-			v_gt = None
-			self.inv_idx = inv_idx
-			mask = mask != 0
-			xyz = xyz.reshape(prefix_shape + (3, ))
-			return voxel_grid_in, xyz_idx_unique, xyz, inv_idx
+		num_outside = 0
+		if zero_one:
+			xyz = xyz - self.bounding_box[0]    			
+		xyz = xyz / res_ratio 
+		
+		# count out of bound points
+		if zero_one:
+			num_outside += (xyz < 0).any(1).sum()
+		num_outside += (xyz >= xyz_span_dest).any(1).sum()
+		if num_outside > 0:
+			logging.warning(f"{num_outside} points are mapped outside the volume")
+		
+		return xyz, vol_in
 
 
+	def add_feat_to_voxels(self, xyz: torch.Tensor,
+			features: torch.Tensor,
+			new_res=0.9,
+			return_vol=True,
+			patchify=False,
+			return_mask=False
+			) \
+		-> Tuple[torch.Tensor, torch.Tensor]:
+		"""
+		Match final (unscaled) 3D coordinates and corresponding features to voxels.
+		
+		Args: 
+			xyz: transformed coordinates for INR training. (npoints, 3)
+			features: features for INR training. (npoints, ) or (npoints, feature_dim)
+			new_res: grid size as a fraction of the original size
+			return_vol: whether to return coordinates as volume for 3D conv
+			patchify: whether to split the volume into patches and randomly sample one patch
+		"""
+		
+		device = self.resolution.device
+		features = features[:, None] if features.ndim == 1 else features
+		feature_dim = features.shape[-1] 
+
+		xyz, vol_in = self.points2grid(xyz, feature_dim=feature_dim, zero_one=False, new_res=new_res)
+		cloud = Pointclouds(xyz[None], features = features[None])
+		
+		# avoid autocast error
+		with torch.autocast("cuda", enabled=False):
+			# interpolate to 8 surrounding vertices
+			vol_in = add_pointclouds_to_volumes(
+				cloud, vol_in, mode="trilinear"
+			)
+		
+		coords = vol_in.get_coord_grid(world_coordinates=False).squeeze()
+		#  map to [0, 1] as per original INR processing
+		coords = (coords + 1) / 2   
+		features = vol_in.features().squeeze()
+		breakpoint()
+		self.last_xyz = xyz
+		if patchify:
+			patch_size = math.ceil(features.shape[1] / self.num_patches)
+
+			feature_pathces = [features[:, i * patch_size: (i + 1) * patch_size] for i in range(self.num_patches)]
+			coord_patches = [coords[:, i * patch_size: (i + 1) * patch_size] for i in range(self.num_patches)]
+
+			features = feature_pathces[self.patch_idx]
+			coords = coord_patches[self.patch_idx]
+			
+		if not return_vol:
+			xyz = features.nonzero()
+			coords = coords[xyz[:, 0], xyz[:, 1], xyz[:, 2]]
+		# features are always points. coords sometimes 
+		# needed to be a volume for 3D conv
+		features = features[xyz[:, 0], xyz[:, 1], xyz[:, 2]]
+
+		if return_mask:
+			return coords, features, xyz
+		
+		return coords, features
 
 	@property
 	def mean(self) -> float:
