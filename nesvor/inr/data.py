@@ -63,7 +63,7 @@ class PointDataset(object):
 		bounding_box = torch.stack([xyz_transformed.amin(0), xyz_transformed.amax(0)], 0)
 		return bounding_box
 	
-	def get_voxel_grid(self, pad_len, res_new=0.8) -> Tuple[torch.Tensor, torch.Tensor]:
+	def get_voxel_grid(self, pad_len, res_new=0.7) -> Tuple[torch.Tensor, torch.Tensor]:
 		"""
 		Simulate the original voxel grid (coordinates) where stacks are extracted
 		Args:
@@ -139,7 +139,7 @@ class PointDataset(object):
 			v_gt = None
 			self.inv_idx = inv_idx
 			mask = mask != 0
-			xyz = xyz.reshape(prefix_shape + (3, ))
+			xyz = xyz.reshape(prefix_shape + (3, )).int()
 			return voxel_grid_in, xyz_idx_unique, xyz, inv_idx
 
 

@@ -11,7 +11,6 @@ from ..utils import resolution2sigma
 from .net_v3 import volumeNet
 from .data import PointDataset
 import os
-from pytorch_memlab import profile, MemReporter
 from .utils import *
 USE_TORCH = True
     
@@ -232,7 +231,6 @@ class INR(nn.Module):
 
         # hash grid encoding
         prefix_shape = vol_in.shape[:-1]
-        breakpoint()
         vol_in = vol_in.reshape(-1, 3)
         vol_in = self.encoding(vol_in).reshape(prefix_shape + (-1,))
         pe = vol_in[xyz[:, 0], xyz[:, 1], xyz[:, 2]]
@@ -260,7 +258,6 @@ class INR(nn.Module):
         # 3D conv
         if not self.training:
             pe = pe.to(dtype=vol_in.dtype)
-        breakpoint()
         vol_in = vol_in.unsqueeze(0).permute(0, 4, 1, 2, 3) # (1, encoding_dim, x, y, z)
         z = self.density_net(vol_in); del vol_in
         z = z.permute(0, 2, 3, 4, 1).squeeze()
@@ -424,7 +421,6 @@ class NeSVoR(nn.Module):
         self.psf_sigma = resolution2sigma(resolution, isotropic=False)
         self.delta = args.delta * v_mean
         self.build_network(bounding_box)
-        self.reporter = MemReporter(self.inr)
         self.to(args.device)
         
         if self.args.o_inr:
