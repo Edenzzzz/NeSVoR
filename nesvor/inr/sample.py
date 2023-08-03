@@ -87,6 +87,7 @@ def sample_points(
                 v_b = model(xyz_batch).mean(-1) # v is 1D otherwise
             else:
                 v_b = model(xyz_batch)
+            breakpoint()
             v[i : i + batch_size] = v_b
     return v.view(shape)
 

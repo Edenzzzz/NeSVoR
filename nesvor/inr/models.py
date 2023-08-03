@@ -248,7 +248,23 @@ class INR(nn.Module):
 
 		return volume_in
 	
-	
+	def points2grid_coords(self, xyz: torch.Tensor):
+		"""
+		Transform slice coordinates to target grid coordinates 
+		"""
+		pad_len = self.resolutions.max() 
+		xyz_span_this = self.bounding_box[1] - self.bounding_box[0] 
+		device = self.resolutions.device
+		
+		# get voxel grid
+		vol_in = self.get_voxel_grid(pad_len, self.resolutions[0])
+		xyz_span_dest = vol_in.densities().squeeze().shape	# (h, w, l)
+		assert len(xyz_span_dest) == 3, "volume shape should be 3D"
+		
+		xyz_span_dest = torch.tensor(xyz_span_dest, device=device) - pad_len * 2
+
+	def to_new_inner_grid(self, xyz: torch.Tensor, feature_dim, zero_one: bool=True, new_res=0.9) -> Tuple[torch.Tensor, Volumes]:
+		pass
 	def points2grid(self, xyz: torch.Tensor, feature_dim, zero_one: bool=True, new_res=0.9) -> Tuple[torch.Tensor, Volumes]:
 		"""
 		Transform slice coordinates to target grid coordinates 
@@ -266,12 +282,12 @@ class INR(nn.Module):
 		xyz_span_dest = torch.tensor(xyz_span_dest, device=device) - pad_len * 2 # map to unpadded volume 
 
 		# apply scaling ratio
-		res_ratio = xyz_span_this / xyz_span_dest + pad_len # map to unppaded volume
+		res_ratio = xyz_span_this / xyz_span_dest 
 		
 		num_outside = 0
 		if zero_one:
 			xyz = xyz - self.bounding_box[0]    			
-		xyz = xyz / res_ratio 
+		xyz = xyz / res_ratio + pad_len # map to unpadded volume
 		
 		# count out of bound points
 		if zero_one:
@@ -311,7 +327,7 @@ class INR(nn.Module):
 		with torch.autocast("cuda", enabled=False):
 			# interpolate to 8 surrounding vertices
 			vol_in = add_pointclouds_to_volumes(
-				cloud, vol_in, mode="trilinear"
+				cloud, vol_in, mode="nearest"
 			)
 		
 		coords = vol_in.get_coord_grid(world_coordinates=False).squeeze()
@@ -330,14 +346,15 @@ class INR(nn.Module):
 			features = feature_pathces[self.patch_idx]
 			coords = coord_patches[self.patch_idx]
 
-		xyz = features.sum(-1).nonzero()
+		# coords with nonzero features
+		mask = (features != 0).any(-1).nonzero()
 		if not return_vol:
-			coords = coords[xyz[:, 0], xyz[:, 1], xyz[:, 2]]
-		# features are always points. coords sometimes needed to be a volume for 3D conv
-		features = features[xyz[:, 0], xyz[:, 1], xyz[:, 2]]
+			coords = coords[mask[:, 0], mask[:, 1], mask[:, 2]]
+		# features are always points. coords sometimes needed as volume for 3D conv
+		features = features[mask[:, 0], mask[:, 1], mask[:, 2]]
 
 		if return_mask:
-			return coords, features, xyz
+			return coords, features, mask
 		
 		return coords, features
 
@@ -359,9 +376,12 @@ class INR(nn.Module):
 			Warning.warn(" In training but values not provided to forward, overlapping intensities won't be averaged!")
 		dtype = xyz.dtype
 		patchify = self.args.patchify and self.training
-
-		vol_in, values, mask = self.add_feat_to_voxels(xyz, values, patchify=patchify, return_mask=True)
+		if values is not None:
+			vol_in, values, mask = self.add_feat_to_voxels(xyz, values, patchify=patchify, return_mask=True)
+		else:
+			vol_in, mask= self.points2grid_coords(xyz)
 		grid_shape = vol_in.shape[:-1]
+
 		# to hash grid encodings
 		pe = self.encoding(vol_in.reshape(-1, 3)).reshape(grid_shape + (-1,)); del vol_in
 		if not self.training:
@@ -623,6 +643,10 @@ class NeSVoR(nn.Module):
 			pe_bias = pe[
 				..., : self.args.n_levels_bias * self.args.n_features_per_level
 			]
+			
+			if zs[0].shape[0] != pe_bias.shape[0]:
+				breakpoint()
+				
 			results["log_bias"] = self.b_net(torch.cat(zs + [pe_bias], -1)).view(
 				prefix_shape
 			)
@@ -658,7 +682,6 @@ class NeSVoR(nn.Module):
 		).squeeze()
 
 		# deform
-		
 		if self.args.deformable:
 			xyz_ori = xyz
 			de = self.deform_embedding(slice_idx)[:, None].expand(-1, n_samples, -1)
@@ -671,14 +694,15 @@ class NeSVoR(nn.Module):
 			se = None
 
 		results = self.net_forward(xyz, se, values=v)
-		breakpoint()
 		if self.o_inr:
-			v = results["values"]
+			# ground truth and slice embedding accumulated using trilinear interpolation
+			v = results["values"].squeeze()
 			se = results['se']
+
 		# output
-		density = results["density"]
+		density = atleast_2d(results["density"])
 		if "log_bias" in results:
-			log_bias = results["log_bias"]
+			log_bias = atleast_2d(results["log_bias"])
 			bias = log_bias.exp()
 			bias_detach = bias.detach()
 		else:
@@ -686,7 +710,7 @@ class NeSVoR(nn.Module):
 			bias = 1
 			bias_detach = 1
 		if "log_var" in results:
-			log_var = results["log_var"]
+			log_var = atleast_2d(results["log_var"])
 			var = log_var.exp()
 		else:
 			log_var = 0
@@ -695,23 +719,21 @@ class NeSVoR(nn.Module):
 		if not self.args.no_slice_scale:
 			c: Any = F.softmax(self.logit_coef, 0)[slice_idx] * self.n_slices
 			if self.o_inr:
-				_, c = self.inr.add_feat_to_voxels(xyz, c, return_vol=False, patchify=self.args.patchify); del xyz
+				_, c = self.inr.add_feat_to_voxels(xyz, c, return_vol=False, patchify=self.args.patchify)
 		else:
 			c = 1
-		
 		# unsqueeze feature dim if needed
-		bias = bias.unsqueeze(-1) if len(bias.shape) < 2 else bias
-		density = density.unsqueeze(-1) if len(density.shape) < 2 else density
+		c = c.squeeze()
 
 		v_out = (bias * density).mean(-1)
-		v_out = c.squeeze() * v_out
+		v_out = c * v_out
 
 		if not self.args.no_pixel_variance:
-			# var = (bias_detach * psf * var).mean(-1)
 			var = (bias_detach * var).mean(-1)
 			var = c.detach() * var
 			var = var**2
-		if not self.args.no_slice_variance:
+		
+		if not self.args.no_slice_variance and not self.o_inr :
 			var = var + self.log_var_slice.exp()[slice_idx]
 		
 		# losses

@@ -120,7 +120,7 @@ class PointDataset(object):
 
 		return volume_in
 
-	def points2grid(self, xyz: torch.Tensor, feature_dim, zero_one: bool=True, new_res=0.9) -> Tuple[torch.Tensor, Volumes]:
+	def points2grid(self, xyz: torch.Tensor, feature_dim, zero_one: bool=True, new_res=0.7) -> Tuple[torch.Tensor, Volumes]:
 		"""
 		Transform slice coordinates to target grid coordinates 
 		"""
@@ -189,8 +189,6 @@ class PointDataset(object):
 		#  map to [0, 1] as per original INR processing
 		coords = (coords + 1) / 2   
 		features = vol_in.features().squeeze()
-		breakpoint()
-		self.last_xyz = xyz
 		if patchify:
 			patch_size = math.ceil(features.shape[1] / self.num_patches)
 

@@ -11,6 +11,7 @@ from ..transform import RigidTransform
 from ..image import Volume, Slice
 from .data import PointDataset
 from .utils import byte2mb, unique
+import tqdm
 
 def train(slices: List[Slice], args: Namespace) -> Tuple[NeSVoR, List[Slice], Volume]:
     # create training dataset
@@ -102,7 +103,7 @@ def train(slices: List[Slice], args: Namespace) -> Tuple[NeSVoR, List[Slice], Vo
 
     # NOTE: all slice coordinates up until this point
     # are untransformed (slice coordinates) scaled by spatial_scaling
-    for i in range(1, args.n_iter + 1):
+    for i in tqdm.tqdm(range(1, args.n_iter + 1)):
         train_step_start = time.time()
         # forward
         batch = dataset.get_batch(args.batch_size, args.device)
@@ -113,6 +114,8 @@ def train(slices: List[Slice], args: Namespace) -> Tuple[NeSVoR, List[Slice], Vo
                 if k in loss_weights and loss_weights[k]:
                     loss = loss + loss_weights[k] * losses[k]
         # backward
+        if loss.isnan():
+            breakpoint()
         scaler.scale(loss).backward()
         if args.debug:  # check nan grad
             for _name, _p in model.named_parameters():

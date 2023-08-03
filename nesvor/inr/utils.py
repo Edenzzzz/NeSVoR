@@ -1,4 +1,12 @@
 import torch
+def atleast_2d(x: torch.Tensor):
+	"""
+	Ensure feature dim exists. Mostly to account for the removed PSF dim in 3d conv.
+	"""
+	if x.dim() == 1:
+		x = x.unsqueeze(1)
+
+	return x
 
 def byte2mb(byte: int):
 	return byte / 1024 / 1024
