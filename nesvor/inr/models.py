@@ -192,7 +192,8 @@ class INR(nn.Module):
 				outchannel=1 + args.n_features_z,
 				learnable_wave=None,
 				transform=None,
-				mode=None
+				mode=None,
+				use_ckconv=self.args.use_ckconv
 			)
 			self.forward = self._volume_forward
 			self.num_patches = 5
@@ -361,7 +362,7 @@ class INR(nn.Module):
 	def reset_patch(self):
 		self.patch_idx = torch.randint(self.num_patches, size=(1,)).item()
 
-	@torch.autocast("cuda")
+	@torch.autocast("cuda", cache_enabled=False)
 	def _volume_forward(self,
 						xyz: torch.Tensor,
 						values: Optional[torch.Tensor] = None,
@@ -442,6 +443,7 @@ class INR(nn.Module):
 				xyz.shape[0], n_samples, 3, dtype=xyz.dtype, device=xyz.device
 			)
 			xyz = xyz[:, None] + xyz_psf * psf_sigma
+			breakpoint()
 		else:
 			xyz = xyz[:, None]
 		if transformation is not None:
@@ -570,6 +572,7 @@ class NeSVoR(nn.Module):
 		else:
 			self.register_buffer("axisangle", axisangle.detach().clone())
 
+
 	def build_network(self, bounding_box) -> None:
 		if self.args.n_features_slice:
 			self.slice_embedding = nn.Embedding(
@@ -614,6 +617,7 @@ class NeSVoR(nn.Module):
 				dtype=self.args.dtype,
 			)
 
+
 	def net_forward(
 		self,
 		x: torch.Tensor,
@@ -643,9 +647,7 @@ class NeSVoR(nn.Module):
 			pe_bias = pe[
 				..., : self.args.n_levels_bias * self.args.n_features_per_level
 			]
-			
-			if zs[0].shape[0] != pe_bias.shape[0]:
-				breakpoint()
+			assert zs[0].shape[0] == pe_bias.shape[0], "slice embedding should have the same batch dim as pe_bias"
 				
 			results["log_bias"] = self.b_net(torch.cat(zs + [pe_bias], -1)).view(
 				prefix_shape
@@ -656,7 +658,7 @@ class NeSVoR(nn.Module):
 			results["log_var"] = self.sigma_net(torch.cat(zs, -1)).view(prefix_shape)
 		return results
 	
-	@torch.autocast("cuda")
+	@torch.autocast("cuda", cache_enabled=False)
 	def forward(
 		self,
 		xyz: torch.Tensor,
@@ -735,7 +737,7 @@ class NeSVoR(nn.Module):
 		
 		if not self.args.no_slice_variance and not self.o_inr :
 			var = var + self.log_var_slice.exp()[slice_idx]
-		
+
 		# losses
 		# eq (12)
 		losses = {D_LOSS: ((v_out - v) ** 2 / (2 * var)).mean()}
@@ -756,7 +758,10 @@ class NeSVoR(nn.Module):
 
 		if self.args.patchify:
 			self.inr.reset_patch()
-
+		if self.args.profiling:
+			print("max memory allocated: ", torch.cuda.max_memory_allocated() / 1024 ** 3, "GB")
+			torch.cuda.reset_max_memory_allocated()
+			
 		return losses
 
 

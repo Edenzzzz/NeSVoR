@@ -13,6 +13,11 @@ def build_parser_training() -> argparse.ArgumentParser:
     _parser = argparse.ArgumentParser(add_help=False)
     parser = _parser.add_argument_group("model architecture")
     parser.add_argument(
+        "--ckconv",
+        action="store_true",
+        help="whether to use continuous convolution parameterized by a 3-layer MLP"
+    )
+    parser.add_argument(
         "--patchify",
         action="store_true",
         help="Whether to use patched input for O-INR",

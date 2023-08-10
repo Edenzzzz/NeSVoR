@@ -114,8 +114,6 @@ def train(slices: List[Slice], args: Namespace) -> Tuple[NeSVoR, List[Slice], Vo
                 if k in loss_weights and loss_weights[k]:
                     loss = loss + loss_weights[k] * losses[k]
         # backward
-        if loss.isnan():
-            breakpoint()
         scaler.scale(loss).backward()
         if args.debug:  # check nan grad
             for _name, _p in model.named_parameters():
