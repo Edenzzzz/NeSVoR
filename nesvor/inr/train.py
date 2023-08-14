@@ -6,7 +6,7 @@ import torch
 import torch.optim as optim
 import logging
 from ..utils import MovingAverage, log_params, TrainLogger
-from .models import INR, NeSVoR, D_LOSS, S_LOSS, DS_LOSS, I_REG, B_REG, T_REG, D_REG
+from .models import INR, NeSVoR, D_LOSS, S_LOSS, I_REG, B_REG, T_REG, D_REG
 from ..transform import RigidTransform
 from ..image import Volume, Slice
 from .data import PointDataset
@@ -16,10 +16,16 @@ import tqdm
 def train(slices: List[Slice], args: Namespace) -> Tuple[NeSVoR, List[Slice], Volume]:
     # create training dataset
     dataset = PointDataset(slices, args)
+    
+    
+    # additional settings for O-INR
+    upsample_rate = 3 if args.ckconv else 1
     if args.o_inr:
         args.batch_size = dataset.xyz.shape[0] # @wenxuan: use all points for O-INR
         args.image_regularization = "none"
         
+        args.n_samples = 1 if args.ckconv else args.n_samples # PSF samples. ckconv should take care of extra samples 
+
     if args.n_epochs is not None:
         args.n_iter = args.n_epochs * (dataset.v.numel() // args.batch_size)
 
@@ -28,6 +34,7 @@ def train(slices: List[Slice], args: Namespace) -> Tuple[NeSVoR, List[Slice], Vo
     # perform centering and scaling
     spatial_scaling = 30.0 if use_scaling else 1
     bb = dataset.bounding_box
+    
     center = (bb[0] + bb[-1]) / 2 if use_centering else torch.zeros_like(bb[0])
     ax = (
         RigidTransform(torch.cat([torch.zeros_like(center), -center])[None]) # translate to the center of the bounding box
@@ -46,7 +53,8 @@ def train(slices: List[Slice], args: Namespace) -> Tuple[NeSVoR, List[Slice], Vo
         (bb - center) / spatial_scaling,
         spatial_scaling,
         args,
-        dataset.orig_vol_shape
+        dataset.orig_vol_shape,
+        upsample_rate
     )
 
     # setup optimizer

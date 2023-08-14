@@ -12,7 +12,7 @@ nesvor reconstruct \
 --bias-field-correction \
 --registration svort \
 --metric ncc \
---n-levels-bias 4 \
+--n-levels-bias 4 
 
 
 Experiments using O-INR with trilinear extrapolation:

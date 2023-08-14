@@ -145,6 +145,7 @@ class INR(nn.Module):
 		spatial_scaling: float = 1.0,
 		resolutions = None,
 		original_shape: torch.Tensor = None,
+		grid_upsample_rate: int = 1,
 	) -> None:
 		"""
 		Takes in discrete 3D coordinates within the bounding box 
@@ -153,6 +154,7 @@ class INR(nn.Module):
 		if TYPE_CHECKING:
 			self.bounding_box: torch.Tensor
 		self.register_buffer("bounding_box", bounding_box)
+		self.xyz_span_this = bounding_box[1] - bounding_box[0]
 		self.resolutions = resolutions
 		self.args = args
 		self.original_shape = original_shape # shape of the gt volume
@@ -183,6 +185,7 @@ class INR(nn.Module):
 			)
 
 		self.o_inr = args.o_inr
+		self.upsample_rate = grid_upsample_rate
 		# density net
 		if self.o_inr:   
 			self.density_net = volumeNet(
@@ -193,7 +196,8 @@ class INR(nn.Module):
 				learnable_wave=None,
 				transform=None,
 				mode=None,
-				use_ckconv=self.args.use_ckconv
+				use_ckconv=self.args.ckconv,
+				upsample_rate=grid_upsample_rate,
 			)
 			self.forward = self._volume_forward
 			self.num_patches = 5
@@ -231,9 +235,9 @@ class INR(nn.Module):
 			self.bounding_box[1, 2],
 		)
 
-	def get_voxel_grid(self, pad_len, new_res, feature_dim) -> Volumes:
+	def get_voxel_grid(self, pad_len, new_res, feature_dim=1) -> Volumes:
 		"""
-		Simulate the original voxel grid (coordinates) where stacks are extracted
+		Simulate the original voxel grid (coordinates) from which stacks are extracted
 		Args:
 			new_res: resolution of the new voxel grid 
 		"""
@@ -249,124 +253,175 @@ class INR(nn.Module):
 
 		return volume_in
 	
-	def points2grid_coords(self, xyz: torch.Tensor):
-		"""
-		Transform slice coordinates to target grid coordinates 
-		"""
-		pad_len = self.resolutions.max() 
-		xyz_span_this = self.bounding_box[1] - self.bounding_box[0] 
-		device = self.resolutions.device
-		
-		# get voxel grid
-		vol_in = self.get_voxel_grid(pad_len, self.resolutions[0])
-		xyz_span_dest = vol_in.densities().squeeze().shape	# (h, w, l)
-		assert len(xyz_span_dest) == 3, "volume shape should be 3D"
-		
-		xyz_span_dest = torch.tensor(xyz_span_dest, device=device) - pad_len * 2
-
-	def to_new_inner_grid(self, xyz: torch.Tensor, feature_dim, zero_one: bool=True, new_res=0.9) -> Tuple[torch.Tensor, Volumes]:
+ 
+	def to_new_unpadded_grid(self, xyz: torch.Tensor, feature_dim: int, zero_one: bool=True, new_res=0.9) -> Tuple[torch.Tensor, Volumes]:
 		pass
-	def points2grid(self, xyz: torch.Tensor, feature_dim, zero_one: bool=True, new_res=0.9) -> Tuple[torch.Tensor, Volumes]:
+
+		
+	def points2grid(self, xyz: torch.Tensor, feature_dim, zero_one: bool=True, new_res=0.7) -> Tuple[torch.Tensor, Volumes]:
 		"""
-		Transform slice coordinates to target grid coordinates 
+		Rescale slice coordinates to target grid coordinates and create the voxel grid.
 		"""
 
 		pad_len = self.resolutions.max() 
-		xyz_span_this = self.bounding_box[1] - self.bounding_box[0] 
 		device = self.resolutions.device
 		
 		# get voxel grid
 		vol_in = self.get_voxel_grid(pad_len, new_res, feature_dim)
-		xyz_span_dest = vol_in.densities().squeeze().shape	# (h, w, l)
-		assert len(xyz_span_dest) == 3, "volume shape should be 3D"
+		self.xyz_span_dest = vol_in.densities().squeeze().shape	# (h, w, l)
+		assert len(self.xyz_span_dest) == 3, "volume shape should be 3D"
 		
-		xyz_span_dest = torch.tensor(xyz_span_dest, device=device) - pad_len * 2 # map to unpadded volume 
-
+		self.xyz_span_dest = torch.tensor(self.xyz_span_dest, device=device) - pad_len * 2 # map to unpadded volume 
 		# apply scaling ratio
-		res_ratio = xyz_span_this / xyz_span_dest 
+		res_ratio = self.xyz_span_this / self.xyz_span_dest 
 		
+		
+		# count out of bound points
 		num_outside = 0
 		if zero_one:
 			xyz = xyz - self.bounding_box[0]    			
 		xyz = xyz / res_ratio + pad_len # map to unpadded volume
-		
-		# count out of bound points
+
 		if zero_one:
 			num_outside += (xyz < 0).any(1).sum()
-		num_outside += (xyz >= xyz_span_dest).any(1).sum()
+		num_outside += (xyz >= self.xyz_span_dest).any(1).sum()
 		if num_outside > 0:
 			logging.warning(f"{num_outside} points are mapped outside the volume")
 		
 		return xyz, vol_in
 
+
+	def rounded_points2grid(self, xyz: torch.Tensor, feature_dim: int = 1, new_res: int=0.7) \
+		-> Tuple[torch.Tensor, torch.Tensor]:
+		"""
+		Match final (unscaled) 3D coordinates back to coordinates of the voxel grid.
+		Args: 
+			xyz: (npoints, 3) transformed coordinates for INR training.
+			values: (npoints, ) pixel intensities. Will average neighbors if provided.
+		"""
+		
+		# leave the edge part out
+		prefix_shape = xyz.shape[:-1]
+
+		xyz = xyz.reshape(-1, 3)
+		xyz, vol_in = self.points2grid(
+						xyz,
+				  		feature_dim=feature_dim,
+						zero_one=False,
+						new_res=new_res,
+						)
+		
+		# TODO: Replace with trilinear interpolation
+		xyz = xyz.round().int()
+		xyz = xyz.where(xyz < self.xyz_span_dest, self.xyz_span_dest - 1)
+
+		xyz_unique, xyz_idx_unique, inv_idx = unique(xyz, return_counts=False, return_inverse=True, dim=0)
+		# check if index mapping is correct
+		assert (xyz_unique[inv_idx] == xyz).all() and (xyz[xyz_idx_unique] == xyz_unique).all() 
+		
+		# accumulate values on the voxel grid
+		# NOTE: See https://discuss.pytorch.org/t/indexing-with-repeating-indices-numpy-add-at/10223/2
+		# Use tensor.index_put_ or _put
+		self.xyz_idx_unique = xyz_idx_unique
+		self.inv_idx = inv_idx
+
+		return xyz, vol_in
+		
 	
-	def add_feat_to_voxels(self, xyz: torch.Tensor,
+	def add_to_volume(
+			self,
+			xyz: torch.Tensor,
 			features: torch.Tensor,
 			new_res=0.7,
 			return_vol=True,
 			patchify=False,
-			return_mask=False
+			return_mask=False,
 			) \
 		-> Tuple[torch.Tensor, torch.Tensor]:
 		"""
 		Match final (unscaled) 3D coordinates and corresponding features to voxels.
 		
 		Args: 
-			xyz: transformed coordinates for INR training. (npoints, 3)
+			xyz: transformed coordinates for INR training. (npoints, 3) or (npoints, n_PSF, 3)
 			features: features for INR training. (npoints, ) or (npoints, feature_dim)
 			new_res: grid size as a fraction of the original size
 			return_vol: whether to return coordinates as volume for 3D conv
 			patchify: whether to split the volume into patches and randomly sample one patch
 		"""
-		
 		features = features[:, None] if features.ndim == 1 else features
 		feature_dim = features.shape[-1] 
+		prefix_shape = xyz.shape[:-1]
+		xyz = xyz.reshape(-1, 3)
+		round_xyz = self.args.ckconv 
 
-		xyz, vol_in = self.points2grid(xyz, feature_dim=feature_dim, zero_one=False, new_res=new_res)
-		cloud = Pointclouds(xyz[None], features = features[None])
-		# avoid autocast error
-		with torch.autocast("cuda", enabled=False):
-			# interpolate to 8 surrounding vertices
-			vol_in = add_pointclouds_to_volumes(
-				cloud, vol_in, mode="nearest"
+		if not round_xyz:
+			xyz, vol_in = self.points2grid(
+								xyz,
+								feature_dim=feature_dim,
+								zero_one=False,
+								new_res=new_res,
+								)
+		else:
+			# return xyz with overlapping points
+			xyz, vol_in = self.rounded_points2grid(
+								xyz,
+								feature_dim=features.shape[-1],
+								new_res=new_res
 			)
-		
 		coords = vol_in.get_coord_grid(world_coordinates=False).squeeze()
 		#  map to [0, 1] as per original INR processing
-		coords = (coords + 1) / 2   
+		coords = (coords + 1) / 2  
+		return_list = [coords]
+
+		cloud = Pointclouds(xyz[None], features = features[None])
+		# avoid mixed precision error with pytorch3d
+		with torch.autocast("cuda", enabled=False):
+			# interpolate to 8 surrounding vertices
+			mode = "trilinear" if not round_xyz else "nearest"
+			vol_in = add_pointclouds_to_volumes(
+				cloud, vol_in, mode=mode, 
+			)
 		features = vol_in.features().squeeze(0).permute(1, 2, 3, 0) #  -> (h, w, l, feature_dim)
 		
-		
 		if patchify:
+			if round_xyz:
+				raise NotImplementedError("Patchify not supported for ckconv yet")
 			# select one patch from the whole volume
 			patch_size = math.ceil(features.shape[1] / self.num_patches)
+			return_list = [item[:, i * patch_size: (i + 1) * patch_size] for i in range(self.num_patches) for item in return_list]
+			return_list = [item[self.patch_idx] for item in return_list]
 
-			feature_pathces = [features[:, i * patch_size: (i + 1) * patch_size] for i in range(self.num_patches)]
-			coord_patches = [coords[:, i * patch_size: (i + 1) * patch_size] for i in range(self.num_patches)]
 
-			features = feature_pathces[self.patch_idx]
-			coords = coord_patches[self.patch_idx]
+		if not round_xyz:
+			# coords with nonzero features
+			mask = (features != 0).any(-1).nonzero()
+			if not return_vol:
+				coords = coords[mask[:, 0], mask[:, 1], mask[:, 2]]
+			# features are always points. coords sometimes needed as volume for 3D conv
+			features = features[mask[:, 0], mask[:, 1], mask[:, 2]]
+		else:
+			mask = xyz.int()
+			# take overlapping values
+			features = features[mask[:, 0], mask[:, 1], mask[:, 2]]
+		return_list += [features]
 
-		# coords with nonzero features
-		mask = (features != 0).any(-1).nonzero()
-		if not return_vol:
-			coords = coords[mask[:, 0], mask[:, 1], mask[:, 2]]
-		# features are always points. coords sometimes needed as volume for 3D conv
-		features = features[mask[:, 0], mask[:, 1], mask[:, 2]]
 
 		if return_mask:
-			return coords, features, mask
+			return_list += [mask]
 		
-		return coords, features
+		return return_list
+
 
 	def reset_patch(self):
 		self.patch_idx = torch.randint(self.num_patches, size=(1,)).item()
 
+
 	@torch.autocast("cuda", cache_enabled=False)
-	def _volume_forward(self,
-						xyz: torch.Tensor,
-						values: Optional[torch.Tensor] = None,
-						):
+	def _volume_forward(
+			self,
+			xyz: torch.Tensor,
+			values: Optional[torch.Tensor] = None,
+			):
 		"""
 		Args: 
 			xyz: (npoints, 3)
@@ -374,15 +429,20 @@ class INR(nn.Module):
 			values: (npoints, ) GT density values 
 		"""
 		if self.training and values is None:
-			Warning.warn(" In training but values not provided to forward, overlapping intensities won't be averaged!")
+			raise ValueError(" In training but values not provided to forward, overlapping coordinates won't be hanlded!")
+		
 		dtype = xyz.dtype
+		prefix_shape = xyz.shape[:-1]
 		patchify = self.args.patchify and self.training
-		if values is not None:
-			vol_in, values, mask = self.add_feat_to_voxels(xyz, values, patchify=patchify, return_mask=True)
-		else:
-			vol_in, mask= self.points2grid_coords(xyz)
-		grid_shape = vol_in.shape[:-1]
 
+		if values is not None:
+			vol_in, values, mask = self.add_to_volume(xyz, values, patchify=patchify, return_mask=True, new_res=self.upsample_rate * 0.7)
+		else:
+			# must round and keep overlapping coordinates during inference 
+			# to keep the same number of points
+			vol_in, mask = self.rounded_points2grid(xyz, new_res = self.upsample_rate * 0.7)
+
+		grid_shape = vol_in.shape[:-1]
 		# to hash grid encodings
 		pe = self.encoding(vol_in.reshape(-1, 3)).reshape(grid_shape + (-1,)); del vol_in
 		if not self.training:
@@ -443,7 +503,6 @@ class INR(nn.Module):
 				xyz.shape[0], n_samples, 3, dtype=xyz.dtype, device=xyz.device
 			)
 			xyz = xyz[:, None] + xyz_psf * psf_sigma
-			breakpoint()
 		else:
 			xyz = xyz[:, None]
 		if transformation is not None:
@@ -528,6 +587,7 @@ class NeSVoR(nn.Module):
 		spatial_scaling: float,
 		args: Namespace,
 		original_shape: torch.Size,
+		upsample_rate: int = 1,
 	) -> None:
 		super().__init__()
 		if "cpu" in str(args.device):  # CPU mode
@@ -546,13 +606,12 @@ class NeSVoR(nn.Module):
 		self.resolutions = resolution 
 		self.original_shape = original_shape
 
-		self.build_network(bounding_box)
+		self.build_network(bounding_box, upsample_rate)
 		self.to(args.device)
 
 		# added arguments
 		self.o_inr = self.args.o_inr
-		if self.args.o_inr:
-			self.args.n_samples = 1 # set PSF to perturbe only the current point
+
 	@property
 	def transformation(self) -> RigidTransform:
 		return RigidTransform(self.axisangle.detach(), self.trans_first)
@@ -573,7 +632,7 @@ class NeSVoR(nn.Module):
 			self.register_buffer("axisangle", axisangle.detach().clone())
 
 
-	def build_network(self, bounding_box) -> None:
+	def build_network(self, bounding_box, upsample_rate=1) -> None:
 		if self.args.n_features_slice:
 			self.slice_embedding = nn.Embedding(
 				self.n_slices, self.args.n_features_slice # = 16
@@ -592,7 +651,11 @@ class NeSVoR(nn.Module):
 			)
 			self.deform_net = DeformNet(bounding_box, self.args, self.spatial_scaling)
 		
-		self.inr = INR(bounding_box, self.args, self.spatial_scaling, self.resolutions, self.original_shape)
+		self.inr = INR(bounding_box, self.args, self.spatial_scaling, 
+		 			self.resolutions,
+					self.original_shape,
+					upsample_rate
+				)
 		# sigma net
 		if not self.args.no_pixel_variance:
 			self.sigma_net = build_network(
@@ -629,7 +692,7 @@ class NeSVoR(nn.Module):
 
 		if self.o_inr:
 			density, pe, z, values = self.inr(x, values=values) # outputs are all pointcloud-like values
-			_, se = self.inr.add_feat_to_voxels(x, se, return_vol=False, patchify=self.args.patchify)
+			_, se = self.inr.add_to_volume(x, se, return_vol=False, patchify=self.args.patchify)
 			results["values"] = values
 			results['se'] = se
 		else:
@@ -657,6 +720,7 @@ class NeSVoR(nn.Module):
 			zs.append(z[..., 1:])
 			results["log_var"] = self.sigma_net(torch.cat(zs, -1)).view(prefix_shape)
 		return results
+	
 	
 	@torch.autocast("cuda", cache_enabled=False)
 	def forward(
@@ -721,7 +785,7 @@ class NeSVoR(nn.Module):
 		if not self.args.no_slice_scale:
 			c: Any = F.softmax(self.logit_coef, 0)[slice_idx] * self.n_slices
 			if self.o_inr:
-				_, c = self.inr.add_feat_to_voxels(xyz, c, return_vol=False, patchify=self.args.patchify)
+				_, c = self.inr.add_to_volume(xyz, c, return_vol=False, patchify=self.args.patchify)
 		else:
 			c = 1
 		# unsqueeze feature dim if needed

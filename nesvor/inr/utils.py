@@ -36,6 +36,7 @@ def unique(x, dim=None, return_index=True, return_inverse=False, return_counts=F
 	inv_flipped, perm = inverse.flip([0]), perm.flip([0])
 	return_list = [unique]
 	if return_index:
+		# unique values' index in the original array
 		return_list.append(inv_flipped.new_empty(unique.size(0)).scatter(0, inv_flipped, perm))
 	if return_counts:
 		return_list.append(counts)

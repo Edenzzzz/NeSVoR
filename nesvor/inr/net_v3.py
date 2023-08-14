@@ -30,7 +30,6 @@ conv_cfg = {
 	'use_fft': False,
 	'bias': True,
 	'padding': True,
-	'stride': 1,
 	'causal': False,
 }
 
@@ -42,7 +41,7 @@ import ckconv
 
 
 class volumeNet(nn.Module):
-	def __init__(self, nlevel, wave, inchannel, outchannel, learnable_wave, transform, mode, use_ckconv=False):
+	def __init__(self, nlevel, wave, inchannel, outchannel, learnable_wave, transform, mode, use_ckconv=False, upsample_rate=1):
 		super(volumeNet, self).__init__()
 		self.nlevel = nlevel
 		self.wave = wave
@@ -53,30 +52,42 @@ class volumeNet(nn.Module):
 		self.transform = transform                                          
 		self.inchannel = inchannel
 		self.outchannel = outchannel
+		self.upsample_rate = upsample_rate
 		print("model inchannel:", inchannel)
 		print("model outchannel:", outchannel)
 
 		if not use_ckconv:
 			print("Using vanilla conv (time domain)")
-			self.approx_conv1 = nn.Conv3d(inchannel, 64, 3, 1, padding='same')
-			self.approx_conv2 = nn.Conv3d(64, 128, 3, 1, padding='same')
-			self.approx_conv3 = nn.Conv3d(128, 128, 3, 1, padding='same')
-			self.approx_conv4 = nn.Conv3d(128, 64, 3, 1, padding='same')
-			self.approx_conv5 = nn.Conv3d(64, outchannel, 3, 1, padding='same')
+			self.psf_conv1 = nn.Conv3d(inchannel, 64, 3, stride=1, padding='same')
+			self.approx_conv2 = nn.Conv3d(64, 128, 3, stride=1, padding='same')
+			self.approx_conv3 = nn.Conv3d(128, 128, 3, stride=1, padding='same')
+			self.approx_conv4 = nn.Conv3d(128, 64, 3, stride=1, padding='same')
+			self.approx_conv5 = nn.Conv3d(64, outchannel, 3, stride=1, padding='same')
 		else:
 			print("Using ckconv (frequency domain)")
 			# an additional channel indicating whether the value is known
 			inchannel += 1 
-			self.approx_conv1 = ckconv.nn.CKConv(inchannel, 64, 2, kernel_cfg, conv_cfg)
+			# use the first conv layer to aggregate all PSF points to their "center voxel"  
+			conv_cfg['stride'] = self.upsample_rate
+			kernel_cfg['size'] *= self.upsample_rate
+			self.psf_conv1 = ckconv.nn.CKConv(inchannel, 64, 2, kernel_cfg, conv_cfg)
+			
+			# then keep feature map size unchanged
+			kernel_cfg['size'] /= self.upsample_rate
+			conv_cfg['stride'] = 1
 			self.approx_conv2 = ckconv.nn.CKConv(64, 128, 2, kernel_cfg, conv_cfg)
+
+		
 			self.approx_conv3 = ckconv.nn.CKConv(128, 128, 2, kernel_cfg, conv_cfg)
 			self.approx_conv4 = ckconv.nn.CKConv(128, 64, 2, kernel_cfg, conv_cfg)
+			
+
 			self.approx_conv5 = ckconv.nn.CKConv(64, outchannel, 2, kernel_cfg, conv_cfg)
 
 	
 	def forward(self, x):
 		la = x
-		la = self.approx_conv1(la)
+		la = self.psf_conv1(la)
 		# la = F.relu(la)
 		la = torch.sin(la)
 		la = self.approx_conv2(la)
