@@ -188,11 +188,13 @@ class INR(nn.Module):
 		self.upsample_rate = grid_upsample_rate
 		# density net
 		if self.o_inr:   
+			
+			outchannel = 3 if self.args.add_ch else 1 + args.n_features_z
 			self.density_net = volumeNet(
 				None,
 				None,
 				inchannel=n_levels * args.n_features_per_level,
-				outchannel=1 + args.n_features_z,
+				outchannel=outchannel,
 				learnable_wave=None,
 				transform=None,
 				mode=None,
@@ -213,7 +215,6 @@ class INR(nn.Module):
 				n_hidden_layers=args.depth,
 				dtype=torch.float32 if args.img_reg_autodiff else args.dtype,
 			) 
-		
 		
 		# logging
 		logging.debug(
@@ -254,34 +255,48 @@ class INR(nn.Module):
 		return volume_in
 	
  
-	def to_new_unpadded_grid(self, xyz: torch.Tensor, feature_dim: int, zero_one: bool=True, new_res=0.9) -> Tuple[torch.Tensor, Volumes]:
-		pass
-
-		
-	def points2grid(self, xyz: torch.Tensor, feature_dim, zero_one: bool=True, new_res=0.7) -> Tuple[torch.Tensor, Volumes]:
+	def range(self, xyz: torch.Tensor):
 		"""
-		Rescale slice coordinates to target grid coordinates and create the voxel grid.
+		Args:
+			xyz: (npoints, 3) or (1, npoints, 3)
 		"""
+		xyz = xyz.squeeze()
+		xyz_min = xyz.amin(0)
+		xyz_max = xyz.amax(0)
 
-		pad_len = self.resolutions.max() 
+		return xyz_max - xyz_min
+
+	def points2grid(self,
+		 			xyz: torch.Tensor,
+					feature_dim: int = 1,
+					zero_one: bool = True,
+					new_res=0.7,
+					return_nomalized: bool = False
+					) -> Tuple[torch.Tensor, Volumes]:
+		"""
+		Convert slice coordinates to target grid coordinates and create the voxel grid.
+		Args:
+			xyz: (npoints, 3) transformed coordinates for INR training.
+			values: (npoints, ) pixel intensities. Will average neighbors if provided.
+		"""
+		self.final_pad_len = self.resolutions.max() 
 		device = self.resolutions.device
 		
 		# get voxel grid
-		vol_in = self.get_voxel_grid(pad_len, new_res, feature_dim)
+		vol_in = self.get_voxel_grid(self.final_pad_len, new_res, feature_dim)
 		self.xyz_span_dest = vol_in.densities().squeeze().shape	# (h, w, l)
-		assert len(self.xyz_span_dest) == 3, "volume shape should be 3D"
+		assert len(self.xyz_span_dest) == 3, "volume shape should be 3D" 
+
+		# apply scaling. NOTE when using hash grid, coords should be non-negative
+		self.xyz_span_dest = torch.tensor(self.xyz_span_dest, device=device) 
+		xyz = (xyz - self.bounding_box[0]) / self.xyz_span_this 
+		xyz = xyz * self.xyz_span_dest
 		
-		self.xyz_span_dest = torch.tensor(self.xyz_span_dest, device=device) - pad_len * 2 # map to unpadded volume 
-		# apply scaling ratio
-		res_ratio = self.xyz_span_this / self.xyz_span_dest 
-		
-		
+		if not zero_one:
+			xyz = xyz - self.xyz_span_dest / 2
+			
 		# count out of bound points
 		num_outside = 0
-		if zero_one:
-			xyz = xyz - self.bounding_box[0]    			
-		xyz = xyz / res_ratio + pad_len # map to unpadded volume
-
 		if zero_one:
 			num_outside += (xyz < 0).any(1).sum()
 		num_outside += (xyz >= self.xyz_span_dest).any(1).sum()
@@ -292,18 +307,14 @@ class INR(nn.Module):
 
 
 	def rounded_points2grid(self, xyz: torch.Tensor, feature_dim: int = 1, new_res: int=0.7) \
-		-> Tuple[torch.Tensor, torch.Tensor]:
+		-> Tuple[Volumes, torch.Tensor]:
 		"""
-		Match final (unscaled) 3D coordinates back to coordinates of the voxel grid.
+		Match final (transformed) 3D coordinates back to coordinates of the voxel grid.
 		Args: 
 			xyz: (npoints, 3) transformed coordinates for INR training.
 			values: (npoints, ) pixel intensities. Will average neighbors if provided.
 		"""
-		
 		# leave the edge part out
-		prefix_shape = xyz.shape[:-1]
-
-		xyz = xyz.reshape(-1, 3)
 		xyz, vol_in = self.points2grid(
 						xyz,
 				  		feature_dim=feature_dim,
@@ -313,10 +324,8 @@ class INR(nn.Module):
 		
 		# TODO: Replace with trilinear interpolation
 		xyz = xyz.round().int()
-		xyz = xyz.where(xyz < self.xyz_span_dest, self.xyz_span_dest - 1)
-
 		xyz_unique, xyz_idx_unique, inv_idx = unique(xyz, return_counts=False, return_inverse=True, dim=0)
-		# check if index mapping is correct
+		# ensure that index mapping is correct
 		assert (xyz_unique[inv_idx] == xyz).all() and (xyz[xyz_idx_unique] == xyz_unique).all() 
 		
 		# accumulate values on the voxel grid
@@ -327,7 +336,7 @@ class INR(nn.Module):
 
 		return xyz, vol_in
 		
-	
+	@torch.autocast("cuda", enabled=False)
 	def add_to_volume(
 			self,
 			xyz: torch.Tensor,
@@ -339,7 +348,7 @@ class INR(nn.Module):
 			) \
 		-> Tuple[torch.Tensor, torch.Tensor]:
 		"""
-		Match final (unscaled) 3D coordinates and corresponding features to voxels.
+		Match final (transformed) 3D coordinates and corresponding features to voxels.
 		
 		Args: 
 			xyz: transformed coordinates for INR training. (npoints, 3) or (npoints, n_PSF, 3)
@@ -352,8 +361,8 @@ class INR(nn.Module):
 		feature_dim = features.shape[-1] 
 		prefix_shape = xyz.shape[:-1]
 		xyz = xyz.reshape(-1, 3)
-		round_xyz = self.args.ckconv 
 
+		round_xyz = not self.args.ckconv 
 		if not round_xyz:
 			xyz, vol_in = self.points2grid(
 								xyz,
@@ -368,30 +377,17 @@ class INR(nn.Module):
 								feature_dim=features.shape[-1],
 								new_res=new_res
 			)
-		coords = vol_in.get_coord_grid(world_coordinates=False).squeeze()
-		#  map to [0, 1] as per original INR processing
-		coords = (coords + 1) / 2  
-		return_list = [coords]
-
-		cloud = Pointclouds(xyz[None], features = features[None])
-		# avoid mixed precision error with pytorch3d
-		with torch.autocast("cuda", enabled=False):
-			# interpolate to 8 surrounding vertices
-			mode = "trilinear" if not round_xyz else "nearest"
-			vol_in = add_pointclouds_to_volumes(
-				cloud, vol_in, mode=mode, 
-			)
-		features = vol_in.features().squeeze(0).permute(1, 2, 3, 0) #  -> (h, w, l, feature_dim)
 		
-		if patchify:
-			if round_xyz:
-				raise NotImplementedError("Patchify not supported for ckconv yet")
-			# select one patch from the whole volume
-			patch_size = math.ceil(features.shape[1] / self.num_patches)
-			return_list = [item[:, i * patch_size: (i + 1) * patch_size] for i in range(self.num_patches) for item in return_list]
-			return_list = [item[self.patch_idx] for item in return_list]
+		cloud = Pointclouds(xyz[None].float(), features = features[None])
+		# avoid mixed precision error with pytorch3d
+		# interpolate onto 8 surrounding vertices
+		mode = "trilinear" if not round_xyz else "nearest"
+		vol_in = add_pointclouds_to_volumes(
+			cloud, vol_in, mode=mode, 
+		)
+		features = vol_in.features().squeeze(0).permute(1, 2, 3, 0) #  -> (h, w, l, feature_dim)
 
-
+		# get GT feature pointcloud from volume 
 		if not round_xyz:
 			# coords with nonzero features
 			mask = (features != 0).any(-1).nonzero()
@@ -400,11 +396,28 @@ class INR(nn.Module):
 			# features are always points. coords sometimes needed as volume for 3D conv
 			features = features[mask[:, 0], mask[:, 1], mask[:, 2]]
 		else:
-			mask = xyz.int()
-			# take overlapping values
+			# take overlapping coodinates
+			mask = (xyz + (vol_in.get_grid_sizes() - 1) / 2).round().int()
+			# mask = vol_in.local_to_world_coords((vol_in.world_to_local_coords(xyz.float()) + 1) ).squeeze().round().int()
 			features = features[mask[:, 0], mask[:, 1], mask[:, 2]]
+			features = features.reshape(*prefix_shape, -1)
+
+
+		coords = vol_in.get_coord_grid(world_coordinates=False).squeeze()
+		#  rescale to [0, 1] as per original INR
+		coords = (coords + 1) / 2  
+
+		return_list = [coords]
 		return_list += [features]
 
+
+		if patchify:
+			if round_xyz:
+				raise NotImplementedError("Patchify not supported for ckconv yet")
+			# select one patch from the whole volume
+			patch_size = math.ceil(features.shape[1] / self.num_patches)
+			return_list = [item[:, i * patch_size: (i + 1) * patch_size] for i in range(self.num_patches) for item in return_list]
+			return_list = [item[self.patch_idx] for item in return_list]
 
 		if return_mask:
 			return_list += [mask]
@@ -424,8 +437,8 @@ class INR(nn.Module):
 			):
 		"""
 		Args: 
-			xyz: (npoints, 3)
-			se: (npoints, 16)
+			xyz: (npoints, 3) or (npoints, n_PSF, 3)
+			se: (npoints, 16) 
 			values: (npoints, ) GT density values 
 		"""
 		if self.training and values is None:
@@ -440,14 +453,29 @@ class INR(nn.Module):
 		else:
 			# must round and keep overlapping coordinates during inference 
 			# to keep the same number of points
-			vol_in, mask = self.rounded_points2grid(xyz, new_res = self.upsample_rate * 0.7)
+			# if not self.training:
+			# 	breakpoint()
+			mask, vol_in = self.rounded_points2grid(xyz, new_res = self.upsample_rate * 0.7)
+			vol_in = vol_in.get_coord_grid(world_coordinates=False)
+			mask = mask.int()
+
 
 		grid_shape = vol_in.shape[:-1]
+		
 		# to hash grid encodings
-		pe = self.encoding(vol_in.reshape(-1, 3)).reshape(grid_shape + (-1,)); del vol_in
-		if not self.training:
-			pe = pe.to(dtype=dtype)
+		pe = self.encoding(vol_in.reshape(-1, 3)).reshape(grid_shape + (-1,))
+		pe = pe.to(dtype=dtype).squeeze()
 		pe = pe.unsqueeze(0).permute(0, 4, 1, 2, 3) # (1, encoding_dim, x, y, z)
+
+		if self.args.add_ch:
+			out = self.density_net(pe) # (1, 3, x, y, z)
+			out = out.squeeze().permute(1, 2, 3, 0) # (x, y, z, 3)
+			out = out[mask[:, 0], mask[:, 1], mask[:, 2]] # (npoints, 3)
+			density = out[:, 0]
+			log_var = out[:, 1]
+			log_bias = out[:, 2]
+			return density, log_var, log_bias, values
+
 		z = self.density_net(pe)
 		z = z.permute(0, 2, 3, 4, 1).squeeze()
 		
@@ -455,8 +483,7 @@ class INR(nn.Module):
 		pe = pe.squeeze(0).permute(1, 2, 3, 0)
 		pe = pe[mask[:, 0], mask[:, 1], mask[:, 2]]
 		z = z[mask[:, 0], mask[:, 1], mask[:, 2]]
-
-		density = F.softplus(z[:, 0])         
+		density = F.softplus(z[:, 0]).reshape(prefix_shape)        
 
 
 		if self.training:
@@ -483,7 +510,6 @@ class INR(nn.Module):
 			pe = pe.to(dtype=dtype)
 		z = self.density_net(pe)
 		density = F.softplus(z[..., 0].view(prefix_shape))
-
 		if self.training:
 			return density, pe, z
 		return density
@@ -694,10 +720,19 @@ class NeSVoR(nn.Module):
 			density, pe, z, values = self.inr(x, values=values) # outputs are all pointcloud-like values
 			_, se = self.inr.add_to_volume(x, se, return_vol=False, patchify=self.args.patchify)
 			results["values"] = values
-			results['se'] = se
+			
 		else:
 			density, pe, z = self.inr(x, values=values)
 		
+		if self.args.add_ch:
+			# use additional channels to predict all values in eq (3)
+			density, log_var, log_bias, values = self.inr(x, values=values)
+			results["density"] = density
+			results["log_var"] = log_var
+			results["log_bias"] = log_bias
+			results["values"] = values
+			return results
+
 
 		results['density'] = density
 		prefix_shape = density.shape
@@ -758,12 +793,11 @@ class NeSVoR(nn.Module):
 			se = self.slice_embedding(slice_idx)[:, None].expand(-1, n_samples, -1).squeeze()
 		else:
 			se = None
-
 		results = self.net_forward(xyz, se, values=v)
 		if self.o_inr:
 			# ground truth and slice embedding accumulated using trilinear interpolation
 			v = results["values"].squeeze()
-			se = results['se']
+			# se = results['se']
 
 		# output
 		density = atleast_2d(results["density"])
@@ -801,24 +835,26 @@ class NeSVoR(nn.Module):
 		
 		if not self.args.no_slice_variance and not self.o_inr :
 			var = var + self.log_var_slice.exp()[slice_idx]
-
-		# losses
-		# eq (12)
-		losses = {D_LOSS: ((v_out - v) ** 2 / (2 * var)).mean()}
-				
-		if not (self.args.no_pixel_variance and self.args.no_slice_variance):
-			losses[S_LOSS] = 0.5 * var.log().mean()
-			losses[DS_LOSS] = losses[D_LOSS] + losses[S_LOSS]
-		if not self.args.no_transformation_optimization:
-			losses[T_REG] = self.trans_loss(trans_first=self.trans_first)
-		if self.args.n_levels_bias:
-			losses[B_REG] = log_bias.mean() ** 2
-		if self.args.deformable:
-			losses[D_REG] = self.deform_reg(
-				xyz, xyz_ori, de
-			)  # deform_reg_autodiff(self.deform_net, xyz_ori, de)
-		# image regularization
-		losses[I_REG] = self.img_reg(density, xyz)
+		if self.args.mse_only:
+			losses = {D_LOSS: F.mse_loss(v_out, v)}
+		else:
+			# losses
+			# eq (12)
+			losses = {D_LOSS: ((v_out - v) ** 2 / (2 * var)).mean()}
+					
+			if not (self.args.no_pixel_variance and self.args.no_slice_variance):
+				losses[S_LOSS] = 0.5 * var.log().mean()
+				losses[DS_LOSS] = losses[D_LOSS] + losses[S_LOSS]
+			if not self.args.no_transformation_optimization:
+				losses[T_REG] = self.trans_loss(trans_first=self.trans_first)
+			if self.args.n_levels_bias:
+				losses[B_REG] = log_bias.mean() ** 2
+			if self.args.deformable:
+				losses[D_REG] = self.deform_reg(
+					xyz, xyz_ori, de
+				)  # deform_reg_autodiff(self.deform_net, xyz_ori, de)
+			# image regularization
+			losses[I_REG] = self.img_reg(density, xyz)
 
 		if self.args.patchify:
 			self.inr.reset_patch()

@@ -13,6 +13,17 @@ def build_parser_training() -> argparse.ArgumentParser:
     _parser = argparse.ArgumentParser(add_help=False)
     parser = _parser.add_argument_group("model architecture")
     parser.add_argument(
+        "--add_ch",
+        action="store_true",
+        help="whether to disable other MLPs and use additional channels in O-INR to predict bias and variance"
+    )
+    
+    parser.add_argument(
+        "--mse-only",
+        action="store_true",
+        help="whether to only use MSE loss"
+    )
+    parser.add_argument(
         "--ckconv",
         action="store_true",
         help="whether to use continuous convolution parameterized by a 3-layer MLP"

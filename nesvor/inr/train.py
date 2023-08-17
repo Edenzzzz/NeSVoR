@@ -12,11 +12,12 @@ from ..image import Volume, Slice
 from .data import PointDataset
 from .utils import byte2mb, unique
 import tqdm
+import matplotlib.pyplot as plt
+import os 
 
 def train(slices: List[Slice], args: Namespace) -> Tuple[NeSVoR, List[Slice], Volume]:
     # create training dataset
     dataset = PointDataset(slices, args)
-    
     
     # additional settings for O-INR
     upsample_rate = 3 if args.ckconv else 1
@@ -24,11 +25,10 @@ def train(slices: List[Slice], args: Namespace) -> Tuple[NeSVoR, List[Slice], Vo
         args.batch_size = dataset.xyz.shape[0] # @wenxuan: use all points for O-INR
         args.image_regularization = "none"
         
-        args.n_samples = 1 if args.ckconv else args.n_samples # PSF samples. ckconv should take care of extra samples 
+        args.n_samples = args.n_samples if args.ckconv else 1 # set PSF samples. ckconv should take care of extra samples 
 
     if args.n_epochs is not None:
         args.n_iter = args.n_epochs * (dataset.v.numel() // args.batch_size)
-
     use_scaling = False
     use_centering = False
     # perform centering and scaling
@@ -86,6 +86,7 @@ def train(slices: List[Slice], args: Namespace) -> Tuple[NeSVoR, List[Slice], Vo
     decay_milestones = [int(m * args.n_iter) for m in args.milestones]
     # setup grad scalar for mixed precision training
     fp16 = not args.single_precision
+    
     scaler = torch.cuda.amp.GradScaler(
         init_scale=1.0,
         enabled=fp16,
@@ -95,6 +96,7 @@ def train(slices: List[Slice], args: Namespace) -> Tuple[NeSVoR, List[Slice], Vo
     )
     # training
     model.train()
+    total_loss = []
     loss_weights = {
         D_LOSS: 1,
         S_LOSS: 1,
@@ -121,6 +123,7 @@ def train(slices: List[Slice], args: Namespace) -> Tuple[NeSVoR, List[Slice], Vo
             for k in losses:
                 if k in loss_weights and loss_weights[k]:
                     loss = loss + loss_weights[k] * losses[k]
+            total_loss += [loss.item()]
         # backward
         scaler.scale(loss).backward()
         if args.debug:  # check nan grad
@@ -187,4 +190,10 @@ def train(slices: List[Slice], args: Namespace) -> Tuple[NeSVoR, List[Slice], Vo
         output_slice = slices[i].clone()
         output_slice.transformation = transformation[i]
         output_slices.append(output_slice)
+    
+    plt.ylabel("Loss")
+    plt.xlabel("Iteration")
+    plt.plot(total_loss)
+    plt.savefig(os.path.join(args.log_dir, "loss.png"))
+
     return model, output_slices, mask
