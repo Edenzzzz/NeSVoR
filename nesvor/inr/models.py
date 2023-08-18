@@ -377,8 +377,8 @@ class INR(nn.Module):
 								feature_dim=features.shape[-1],
 								new_res=new_res
 			)
-		
 		cloud = Pointclouds(xyz[None].float(), features = features[None])
+
 		# avoid mixed precision error with pytorch3d
 		# interpolate onto 8 surrounding vertices
 		mode = "trilinear" if not round_xyz else "nearest"
@@ -386,6 +386,7 @@ class INR(nn.Module):
 			cloud, vol_in, mode=mode, 
 		)
 		features = vol_in.features().squeeze(0).permute(1, 2, 3, 0) #  -> (h, w, l, feature_dim)
+		coords = vol_in.get_coord_grid(world_coordinates=False).squeeze() # (h, w, l, 3)
 
 		# get GT feature pointcloud from volume 
 		if not round_xyz:
@@ -399,26 +400,23 @@ class INR(nn.Module):
 			# take overlapping coodinates
 			mask = (xyz + (vol_in.get_grid_sizes() - 1) / 2).round().int()
 			# mask = vol_in.local_to_world_coords((vol_in.world_to_local_coords(xyz.float()) + 1) ).squeeze().round().int()
-			features = features[mask[:, 0], mask[:, 1], mask[:, 2]]
-			features = features.reshape(*prefix_shape, -1)
 
+		if patchify:
+			# select one patch from the whole volume
+			patch_size = math.ceil(coords.shape[1] / self.num_patches)
+			start = self.patch_idx * patch_size
+			end = min(start + patch_size, coords.shape[1] - 1)
 
-		coords = vol_in.get_coord_grid(world_coordinates=False).squeeze()
-		#  rescale to [0, 1] as per original INR
+			mask = mask[(mask >= start).all(dim=1) & (mask <= end).all(dim=1), :]
+			prefix_shape = torch.Size([-1])
+			
+		# select feature
+		features = features[mask[:, 0], mask[:, 1], mask[:, 2]].reshape(*prefix_shape, feature_dim)
+		#  rescale to [0, 1] as required by hash grid
 		coords = (coords + 1) / 2  
 
 		return_list = [coords]
 		return_list += [features]
-
-
-		if patchify:
-			if round_xyz:
-				raise NotImplementedError("Patchify not supported for ckconv yet")
-			# select one patch from the whole volume
-			patch_size = math.ceil(features.shape[1] / self.num_patches)
-			return_list = [item[:, i * patch_size: (i + 1) * patch_size] for i in range(self.num_patches) for item in return_list]
-			return_list = [item[self.patch_idx] for item in return_list]
-
 		if return_mask:
 			return_list += [mask]
 		
@@ -446,6 +444,7 @@ class INR(nn.Module):
 		
 		dtype = xyz.dtype
 		prefix_shape = xyz.shape[:-1]
+		feature_dim = 1
 		patchify = self.args.patchify and self.training
 
 		if values is not None:
@@ -471,11 +470,15 @@ class INR(nn.Module):
 			out = self.density_net(pe) # (1, 3, x, y, z)
 			out = out.squeeze().permute(1, 2, 3, 0) # (x, y, z, 3)
 			out = out[mask[:, 0], mask[:, 1], mask[:, 2]] # (npoints, 3)
-			density = out[:, 0]
+			
+			density = F.softplus(out[:, 0])
 			log_var = out[:, 1]
 			log_bias = out[:, 2]
-			return density, log_var, log_bias, values
 
+			if self.training:
+				return density, log_var, log_bias, values
+			else:
+				return density
 		z = self.density_net(pe)
 		z = z.permute(0, 2, 3, 4, 1).squeeze()
 		
@@ -483,8 +486,10 @@ class INR(nn.Module):
 		pe = pe.squeeze(0).permute(1, 2, 3, 0)
 		pe = pe[mask[:, 0], mask[:, 1], mask[:, 2]]
 		z = z[mask[:, 0], mask[:, 1], mask[:, 2]]
-		density = F.softplus(z[:, 0]).reshape(prefix_shape)        
-
+		density = F.softplus(z[:, 0]) 
+		
+		if not self.args.patchify:
+			density = density.reshape(prefix_shape)
 
 		if self.training:
 			return density, pe, z, values
@@ -716,15 +721,7 @@ class NeSVoR(nn.Module):
 
 		results = {}
 
-		if self.o_inr:
-			density, pe, z, values = self.inr(x, values=values) # outputs are all pointcloud-like values
-			_, se = self.inr.add_to_volume(x, se, return_vol=False, patchify=self.args.patchify)
-			results["values"] = values
-			
-		else:
-			density, pe, z = self.inr(x, values=values)
-		
-		if self.args.add_ch:
+		if self.args.add_ch and self.o_inr:
 			# use additional channels to predict all values in eq (3)
 			density, log_var, log_bias, values = self.inr(x, values=values)
 			results["density"] = density
@@ -732,6 +729,14 @@ class NeSVoR(nn.Module):
 			results["log_bias"] = log_bias
 			results["values"] = values
 			return results
+		elif self.o_inr:
+			density, pe, z, values = self.inr(x, values=values) # outputs are all pointcloud-like values
+			_, se = self.inr.add_to_volume(x, se, return_vol=False, patchify=self.args.patchify)
+			results["values"] = values
+		else:
+			density, pe, z = self.inr(x, values=values)
+		
+
 
 
 		results['density'] = density
@@ -754,6 +759,18 @@ class NeSVoR(nn.Module):
 		if not self.args.no_pixel_variance:
 			zs.append(z[..., 1:])
 			results["log_var"] = self.sigma_net(torch.cat(zs, -1)).view(prefix_shape)
+		
+		# debug loss
+		is_nan = False
+		nan_list = []
+		for k, v in results.items():
+			if v.isnan().any():
+				is_nan = True
+				nan_list.append(k)
+		if is_nan:
+			print("Nan in ", nan_list, " Please debug")
+			breakpoint()
+			
 		return results
 	
 	
@@ -767,6 +784,7 @@ class NeSVoR(nn.Module):
 		# sample psf point
 		batch_size = xyz.shape[0]
 		n_samples = self.args.n_samples
+		eps = 1e-5
 		#NOTE: monte carlo sampling for psf at each pixel location
 		# see notes before eq. (7) in the paper
 		xyz_psf = torch.randn(
@@ -832,7 +850,8 @@ class NeSVoR(nn.Module):
 			var = (bias_detach * var).mean(-1)
 			var = c.detach() * var
 			var = var**2
-		
+			var += eps
+
 		if not self.args.no_slice_variance and not self.o_inr :
 			var = var + self.log_var_slice.exp()[slice_idx]
 		if self.args.mse_only:
@@ -840,8 +859,11 @@ class NeSVoR(nn.Module):
 		else:
 			# losses
 			# eq (12)
-			losses = {D_LOSS: ((v_out - v) ** 2 / (2 * var)).mean()}
-					
+
+			losses = {D_LOSS: ((v_out - v) ** 2 / (2 * var + eps)).mean()}
+			# if losses[D_LOSS].isnan().any():
+			# 	losses = {D_LOSS: ((v_out - v + 1e-4) ** 2 / (2 * var)).mean()}
+				
 			if not (self.args.no_pixel_variance and self.args.no_slice_variance):
 				losses[S_LOSS] = 0.5 * var.log().mean()
 				losses[DS_LOSS] = losses[D_LOSS] + losses[S_LOSS]
@@ -855,7 +877,18 @@ class NeSVoR(nn.Module):
 				)  # deform_reg_autodiff(self.deform_net, xyz_ori, de)
 			# image regularization
 			losses[I_REG] = self.img_reg(density, xyz)
-
+			
+			# debug loss
+			isnan = False
+			nan_list = []
+			for key, loss in losses.items():
+				if loss.isnan().any() or loss.isinf().any():
+					isnan = True
+					nan_list.append(key)	
+			if isnan:
+				print("nan in loss!! Please debug")
+				breakpoint()
+				
 		if self.args.patchify:
 			self.inr.reset_patch()
 		if self.args.profiling:
