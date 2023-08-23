@@ -251,7 +251,6 @@ class INR(nn.Module):
 		densities = torch.zeros([1, 1] + new_size, dtype=torch.float32, device=device)
 		features = torch.zeros([1, feature_dim] + new_size, dtype=torch.float32, device=device)
 		volume_in = Volumes(densities, features)
-
 		return volume_in
 	
  
@@ -444,7 +443,6 @@ class INR(nn.Module):
 		
 		dtype = xyz.dtype
 		prefix_shape = xyz.shape[:-1]
-		feature_dim = 1
 		patchify = self.args.patchify and self.training
 
 		if values is not None:
@@ -479,6 +477,7 @@ class INR(nn.Module):
 				return density, log_var, log_bias, values
 			else:
 				return density
+			
 		z = self.density_net(pe)
 		z = z.permute(0, 2, 3, 4, 1).squeeze()
 		

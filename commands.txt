@@ -1,4 +1,7 @@
-
+To install:
+Follow the instructions of pytorch3d first https://github.com/facebookresearch/pytorch3d/blob/main/INSTALL.md
+And then Nesvor https://nesvor.readthedocs.io/en/latest/installation.html#from-source
+Or try using the env.yaml file
 
 To add more arguments:
 see NeSVoR/nesvor/cli/parsers.py
@@ -15,9 +18,14 @@ nesvor reconstruct \
 --n-levels-bias 4 
 
 
-Experiments using O-INR with trilinear extrapolation:
+Experiments using O-INR with trilinear extrapolation (use --notes to differentiate logs if not original INR):
 nesvor reconstruct --input-stacks stacks/feta_sub-001_stack0_cgap=3.nii.gz stacks/feta_sub-001_stack1_gap=3.nii.gz stacks/feta_sub-001_stack2_gap=3.nii.gz --thickness 3 3 3 --output-volume volumes/feta_sub-001_rec_gap=3.nii.gz --bias-field-correction --registration svort --metric ncc --n-levels-bias 4 --o-inr  --notes "trilinear" --n-iter 1500 --single-precision
 
 Experiments using O-INR with patching and extrapolation:
 nesvor reconstruct --input-stacks stacks/feta_sub-001_stack0_gap=3.nii.gz stacks/feta_sub-001_stack1_gap=3.nii.gz stacks/feta_sub-001_stack2_gap=3.nii.gz --thickness 3 3 3 --output-volume volumes/feta_sub-001_rec_gap=3.nii.gz --bias-field-correction --registration svort --metric ncc --n-levels-bias 4 --o-inr  --patchify --notes "patchify"
+
+Use --notes to specify the name of the log folder.
+Additional settings:
+--add-ch 
+--mse-only
 

@@ -174,7 +174,6 @@ class Reconstruct(Command):
         model = model.inr
 
         self.new_timer("Results saving")
-
         output_volume, simulated_slices = _sample_inr(
             self.args,
             model,

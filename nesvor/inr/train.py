@@ -118,7 +118,8 @@ def train(slices: List[Slice], args: Namespace) -> Tuple[NeSVoR, List[Slice], Vo
         # forward
         batch = dataset.get_batch(args.batch_size, args.device)
         with torch.cuda.amp.autocast(fp16):
-            losses = model(**batch)
+            losses = model(
+                **batch)
             loss = 0
             for k in losses:
                 if k in loss_weights and loss_weights[k]:
