@@ -20,10 +20,13 @@ def main() -> None:
             return
     # parse args
     args = parser.parse_args()
-
     ############################
     # Newly added args for O-INR
     ############################
+    for path  in args.input_stacks:
+        if not os.path.exists(path):
+            raise ValueError(f"Input stack {path} does not exist.")
+        
     if args.o_inr:
             model_name = "O_INR"
     else:

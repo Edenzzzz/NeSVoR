@@ -135,7 +135,7 @@ venv.bak/
 .mypy_cache/
 .dmypy.json
 dmypy.json
-
+DDP_ZeRO_example.py
 # Pyre type checker
 .pyre/
 *.pth

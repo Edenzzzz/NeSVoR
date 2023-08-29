@@ -282,8 +282,8 @@ def build_parser_training() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--single-precision",
-        action="store_true",
-        help="use float32 training (default: float16/float32 mixed trainig)",
+        default=False,
+        help="use float32 training (default: float16/float32 mixed trainig). Deprecated by adding torch.autocast",
     )
     return _parser
 
