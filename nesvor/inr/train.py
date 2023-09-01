@@ -25,7 +25,7 @@ def train(slices: List[Slice], args: Namespace) -> Tuple[NeSVoR, List[Slice], Vo
         args.batch_size = dataset.xyz.shape[0] # @wenxuan: use all points for O-INR
         args.image_regularization = "none"
         
-        args.n_samples = args.n_samples if args.ckconv else 0 # set PSF samples. ckconv should take care of extra samples 
+        args.n_samples = args.n_samples if args.ckconv else 1 # set PSF samples. ckconv should take care of extra samples 
 
     if args.n_epochs is not None:
         args.n_iter = args.n_epochs * (dataset.v.numel() // args.batch_size)

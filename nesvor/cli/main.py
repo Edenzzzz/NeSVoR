@@ -6,6 +6,7 @@ import string
 import logging
 from .parsers import main_parser
 import os
+from .. import utils
 
 def main() -> None:
 
@@ -56,20 +57,23 @@ def main() -> None:
         args.save_hash = True
     else:
         args.save_hash = False
-        
-    args.output_log = os.path.join(dir, "console_log.txt")    
-
+    args.output_log = os.path.join(dir, "console_log.txt")
+    utils.setup_logger(args.output_log, args.verbose)
+    if args.o_inr:
+        if args.trilinear_devox:
+            logging.info("Using trilinear devoxlization")
+        else:
+            logging.info("Using nearest neighbor devoxlization")
+    
     run(args)
 
 def run(args) -> None:
     import torch
     from . import commands
-    from .. import utils
 
     # setup logger
     if args.debug:
         args.verbose = 2
-    utils.setup_logger(args.output_log, args.verbose)
     # setup device
     if args.device >= 0:
         args.device = torch.device(args.device)

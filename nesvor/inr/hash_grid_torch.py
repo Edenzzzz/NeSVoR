@@ -42,6 +42,32 @@ class HashEmbedder(nn.Module):
             torch.tensor([[[i, j, k] for i in [0, 1] for j in [0, 1] for k in [0, 1]]]),
         )
 
+
+    def trilinear_extrap(
+            self,
+            x: torch.Tensor,
+            voxel_min_vertex: torch.Tensor,
+            voxel_embedds: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Extrapolate batched coordinate features onto 8 vertices and average them.
+        x: B x 3
+        voxel_min_vertex: B x 3
+        voxel_max_vertex: B x 3
+        voxel_embedds: B x 8 x feature_dim
+        """
+        # source: https://en.wikipedia.org/wiki/Trilinear_interpolation
+        weights = x - voxel_min_vertex
+
+        # Get coefficients for each vertex
+        # 0->000, 1->001, 2->010, 3->011, 4->100, 5->101, 6->110, 7->111
+        c00 = (
+            voxel_embedds * (1 - weights[:, 2]) * (1 - weights[:, 1]) 
+        )
+        c01 = (
+            voxel_embedds * (1 - weights[:, 2]) * weights[:, 1]
+        )
+
     def trilinear_interp(
         self,
         x: torch.Tensor,
@@ -52,28 +78,28 @@ class HashEmbedder(nn.Module):
         x: B x 3
         voxel_min_vertex: B x 3
         voxel_max_vertex: B x 3
-        voxel_embedds: B x 8 x 2
+        voxel_embedds: B x feature_dim
         """
-        # source: https://en.wikipedia.org/wiki/Trilinear_interpolation
+
         weights = x - voxel_min_vertex
 
         # step 1
         # 0->000, 1->001, 2->010, 3->011, 4->100, 5->101, 6->110, 7->111
         c00 = (
-            voxel_embedds[:, 0] * (1 - weights[:, 0][:, None])
-            + voxel_embedds[:, 4] * weights[:, 0][:, None]
+                voxel_embedds[:, 0] * (1 - weights[:, 0][:, None])
+                + voxel_embedds[:, 4] * weights[:, 0][:, None]
         )
         c01 = (
-            voxel_embedds[:, 1] * (1 - weights[:, 0][:, None])
-            + voxel_embedds[:, 5] * weights[:, 0][:, None]
+                voxel_embedds[:, 1] * (1 - weights[:, 0][:, None])
+                + voxel_embedds[:, 5] * weights[:, 0][:, None]
         )
         c10 = (
-            voxel_embedds[:, 2] * (1 - weights[:, 0][:, None])
-            + voxel_embedds[:, 6] * weights[:, 0][:, None]
+                voxel_embedds[:, 2] * (1 - weights[:, 0][:, None])
+                + voxel_embedds[:, 6] * weights[:, 0][:, None]
         )
         c11 = (
-            voxel_embedds[:, 3] * (1 - weights[:, 0][:, None])
-            + voxel_embedds[:, 7] * weights[:, 0][:, None]
+                voxel_embedds[:, 3] * (1 - weights[:, 0][:, None])
+                + voxel_embedds[:, 7] * weights[:, 0][:, None]
         )
 
         # step 2

@@ -13,6 +13,12 @@ def build_parser_training() -> argparse.ArgumentParser:
     _parser = argparse.ArgumentParser(add_help=False)
     parser = _parser.add_argument_group("model architecture")
     parser.add_argument(
+        "--trilinear_devox",
+        default=True,
+        type=eval,
+        help="whether to use trilinear devoxelization instead of nearest neighbor",
+    )
+    parser.add_argument(
         "--add-ch",
         action="store_true",
         help="whether to disable other MLPs and use additional channels in O-INR to predict bias and variance"
@@ -283,6 +289,7 @@ def build_parser_training() -> argparse.ArgumentParser:
     parser.add_argument(
         "--single-precision",
         default=False,
+        type=eval,
         help="use float32 training (default: float16/float32 mixed trainig). Deprecated by adding torch.autocast",
     )
     return _parser

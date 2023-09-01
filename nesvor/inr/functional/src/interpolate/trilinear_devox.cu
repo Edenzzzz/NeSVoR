@@ -115,6 +115,7 @@ __global__ void trilinear_devoxelize_kernel(int b, int c, int n, int r, int r2,
     grad_y : grad outputs, FloatTensor[b, c, n]
     grad_x : grad inputs, FloatTensor[b, c, r3]
 */
+// template <typename scalar_t>
 __global__ void trilinear_devoxelize_grad_kernel(
     int b, int c, int n, int r3, const int *__restrict__ inds,
     const float *__restrict__ wgts, const float *__restrict__ grad_y,
